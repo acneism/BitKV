@@ -25,6 +25,7 @@ type config struct {
 	raftID      string
 	raftPeers   string
 	raftDir     string
+	raftNoFsync bool
 	opts        bitcask.Options
 }
 
@@ -43,6 +44,7 @@ func main() {
 	flag.StringVar(&cfg.raftID, "raft-id", "", "raft node id; enables replication")
 	flag.StringVar(&cfg.raftPeers, "raft-peers", "", "all raft nodes including this one: id=host:port,id=host:port")
 	flag.StringVar(&cfg.raftDir, "raft-dir", "", "raft log and snapshot directory (default <dir>/raft)")
+	flag.BoolVar(&cfg.raftNoFsync, "raft-unsafe-no-fsync", false, "skip fsync of the raft log: faster, but a power loss on one node followed by a leader failure can lose acknowledged writes")
 	flag.Parse()
 	if cfg.requirePass == "" {
 		cfg.requirePass = os.Getenv("BITKV_REQUIREPASS")
@@ -77,6 +79,9 @@ func run(logger *slog.Logger, cfg config) error {
 			return err
 		}
 		logger.Info("raft started", "id", cfg.raftID, "peers", cfg.raftPeers)
+		if cfg.raftNoFsync {
+			logger.Warn("raft log fsync is disabled (-raft-unsafe-no-fsync): a power loss can lose acknowledged writes")
+		}
 	}
 
 	ln, err := net.Listen("tcp", cfg.addr)
@@ -127,7 +132,7 @@ func openReplica(cfg config, db *bitcask.DB) (*replica.Node, error) {
 	if dir == "" {
 		dir = filepath.Join(cfg.dir, "raft")
 	}
-	return replica.Open(db, replica.Config{ID: cfg.raftID, Peers: peers, Dir: dir, LogOutput: os.Stderr})
+	return replica.Open(db, replica.Config{ID: cfg.raftID, Peers: peers, Dir: dir, LogOutput: os.Stderr, UnsafeNoFsync: cfg.raftNoFsync})
 }
 
 func closeStore(rep *replica.Node, db *bitcask.DB) error {

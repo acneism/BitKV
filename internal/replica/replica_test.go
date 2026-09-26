@@ -16,11 +16,12 @@ import (
 )
 
 type testNode struct {
-	id    string
-	dir   string
-	peers map[string]string
-	db    *bitcask.DB
-	node  *Node
+	id     string
+	dir    string
+	peers  map[string]string
+	db     *bitcask.DB
+	node   *Node
+	unsafe bool
 }
 
 var raftConfig = testRaftConfig
@@ -45,7 +46,7 @@ func (tn *testNode) start(t testing.TB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := open(db, Config{ID: tn.id, Peers: tn.peers, Dir: filepath.Join(tn.dir, "raft")}, raftConfig())
+	n, err := open(db, Config{ID: tn.id, Peers: tn.peers, Dir: filepath.Join(tn.dir, "raft"), UnsafeNoFsync: tn.unsafe}, raftConfig())
 	if err != nil {
 		db.Close()
 		t.Fatal(err)
@@ -67,13 +68,13 @@ func (tn *testNode) stop(t testing.TB) {
 	tn.node = nil
 }
 
-func newCluster(t testing.TB, size int) []*testNode {
+func newCluster(t testing.TB, size int, unsafe bool) []*testNode {
 	peers := make(map[string]string)
 	nodes := make([]*testNode, size)
 	for i := range nodes {
 		id := "n" + strconv.Itoa(i)
 		peers[id] = freeAddr(t)
-		nodes[i] = &testNode{id: id, dir: t.TempDir(), peers: peers}
+		nodes[i] = &testNode{id: id, dir: t.TempDir(), peers: peers, unsafe: unsafe}
 	}
 	for _, tn := range nodes {
 		tn.start(t)
@@ -171,7 +172,11 @@ func converged(nodes []*testNode, key, want string, keys int) func() bool {
 }
 
 func TestConcurrentWritesReplicate(t *testing.T) {
-	nodes := newCluster(t, 3)
+	eachMode(t, testConcurrentWrites)
+}
+
+func testConcurrentWrites(t *testing.T, unsafe bool) {
+	nodes := newCluster(t, 3, unsafe)
 	l := leader(t, nodes)
 	var wg sync.WaitGroup
 	errs := make(chan error, 8)
@@ -208,7 +213,11 @@ func TestConcurrentWritesReplicate(t *testing.T) {
 }
 
 func TestCatchUpAndFailover(t *testing.T) {
-	nodes := newCluster(t, 3)
+	eachMode(t, testCatchUpAndFailover)
+}
+
+func testCatchUpAndFailover(t *testing.T, unsafe bool) {
+	nodes := newCluster(t, 3, unsafe)
 	l := leader(t, nodes)
 	for range 50 {
 		must(t, incr(l, "counter"))
@@ -246,5 +255,11 @@ func TestRefusesOldRaftLog(t *testing.T) {
 	peers := map[string]string{"n0": freeAddr(t)}
 	if _, err := open(db, Config{ID: "n0", Peers: peers, Dir: filepath.Join(dir, "raft")}, testRaftConfig()); !errors.Is(err, ErrOldRaftLog) {
 		t.Fatalf("open with raft.db: %v, want ErrOldRaftLog", err)
+	}
+}
+
+func eachMode(t *testing.T, fn func(t *testing.T, unsafe bool)) {
+	for _, unsafe := range []bool{false, true} {
+		t.Run("unsafe-no-fsync="+strconv.FormatBool(unsafe), func(t *testing.T) { fn(t, unsafe) })
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/hashicorp/raft"
 	wal "github.com/hashicorp/raft-wal"
 	"github.com/hashicorp/raft-wal/segment"
+	"github.com/hashicorp/raft-wal/types"
 )
 
 var (
@@ -43,10 +44,11 @@ const (
 )
 
 type Config struct {
-	ID        string
-	Peers     map[string]string
-	Dir       string
-	LogOutput io.Writer
+	ID            string
+	Peers         map[string]string
+	Dir           string
+	LogOutput     io.Writer
+	UnsafeNoFsync bool
 }
 
 type Status struct {
@@ -132,7 +134,11 @@ func open(db *bitcask.DB, cfg Config, rc *raft.Config) (*Node, error) {
 	if err := initWalMeta(walDir); err != nil {
 		return nil, err
 	}
-	store, err := wal.Open(walDir, wal.WithLogger(logger), wal.WithSegmentFiler(segment.NewFiler(walDir, newWalFS())))
+	vfs := newWalFS()
+	if cfg.UnsafeNoFsync {
+		vfs = noSyncFS{vfs}
+	}
+	store, err := wal.Open(walDir, wal.WithLogger(logger), wal.WithSegmentFiler(segment.NewFiler(walDir, vfs)))
 	if err != nil {
 		return nil, err
 	}
@@ -472,4 +478,32 @@ func unexpected(err error) error {
 		return io.ErrUnexpectedEOF
 	}
 	return err
+}
+
+type noSyncFS struct {
+	types.VFS
+}
+
+func (fs noSyncFS) Create(dir, name string, size uint64) (types.WritableFile, error) {
+	f, err := fs.VFS.Create(dir, name, size)
+	if err != nil {
+		return nil, err
+	}
+	return noSyncFile{f}, nil
+}
+
+func (fs noSyncFS) OpenWriter(dir, name string) (types.WritableFile, error) {
+	f, err := fs.VFS.OpenWriter(dir, name)
+	if err != nil {
+		return nil, err
+	}
+	return noSyncFile{f}, nil
+}
+
+type noSyncFile struct {
+	types.WritableFile
+}
+
+func (noSyncFile) Sync() error {
+	return nil
 }
