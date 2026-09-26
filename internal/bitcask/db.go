@@ -4,9 +4,11 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -271,6 +273,81 @@ func (db *DB) Flush() error {
 		}
 	}
 	return nil
+}
+
+type SnapshotFile struct {
+	Path string
+	Size int64
+}
+
+func (db *DB) LinkFiles(dir string) (int, []SnapshotFile, error) {
+	if err := db.Sync(); err != nil {
+		return 0, nil, err
+	}
+	db.txGate.Lock()
+	defer db.txGate.Unlock()
+	var files []SnapshotFile
+	for _, g := range db.groups {
+		g.filesMu.RLock()
+		defer g.filesMu.RUnlock()
+		ids := make([]uint32, 0, len(g.files))
+		for id := range g.files {
+			ids = append(ids, id)
+		}
+		slices.Sort(ids)
+		for _, id := range ids {
+			size := g.files[id].written.Load()
+			if size == 0 {
+				continue
+			}
+			names := []string{fileName(id, dataExt)}
+			if fileExists(filepath.Join(g.dir, fileName(id, hintExt))) {
+				names = append(names, fileName(id, hintExt))
+			}
+			for i, name := range names {
+				src := filepath.Join(g.dir, name)
+				rel, err := filepath.Rel(db.dir, src)
+				if err != nil {
+					return 0, nil, err
+				}
+				if i > 0 {
+					st, err := os.Stat(src)
+					if err != nil {
+						return 0, nil, err
+					}
+					size = st.Size()
+				}
+				if err := linkOrCopy(src, filepath.Join(dir, rel), size); err != nil {
+					return 0, nil, err
+				}
+				files = append(files, SnapshotFile{Path: filepath.ToSlash(rel), Size: size})
+			}
+		}
+	}
+	return len(db.groups), files, nil
+}
+
+func linkOrCopy(src, dst string, size int64) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	if os.Link(src, dst) == nil {
+		return nil
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	_, err = io.CopyN(out, in, size)
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 func (db *DB) Merge() error {

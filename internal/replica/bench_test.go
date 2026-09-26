@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/raft"
+	wal "github.com/hashicorp/raft-wal"
 )
 
 func benchRaftConfig() *raft.Config {
@@ -20,8 +21,8 @@ func benchRaftConfig() *raft.Config {
 func benchModes(b *testing.B, fn func(b *testing.B, l *testNode)) {
 	for _, unsafe := range []bool{false, true} {
 		b.Run("unsafe-no-fsync="+strconv.FormatBool(unsafe), func(b *testing.B) {
-			raftConfig = benchRaftConfig
-			b.Cleanup(func() { raftConfig = testRaftConfig })
+			raftConfig, testSegmentSize = benchRaftConfig, wal.DefaultSegmentSize
+			b.Cleanup(func() { raftConfig, testSegmentSize = testRaftConfig, 8<<10 })
 			nodes := newCluster(b, 3, unsafe)
 			l := leader(b, nodes)
 			b.SetParallelism(16)

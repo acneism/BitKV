@@ -73,6 +73,21 @@ func (cmd command) validArity(n int) bool {
 	return (cmd.arity <= 0 || n == cmd.arity) && (cmd.arity >= 0 || n >= -cmd.arity)
 }
 
+func lookup(name []byte) (command, bool) {
+	var buf [24]byte
+	if len(name) > len(buf) {
+		return command{}, false
+	}
+	for i, c := range name {
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		buf[i] = c
+	}
+	cmd, ok := commands[string(buf[:len(name)])]
+	return cmd, ok
+}
+
 var commands map[string]command
 
 func init() {

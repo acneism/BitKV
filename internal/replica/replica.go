@@ -1,7 +1,6 @@
 package replica
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/rand"
 	"encoding/binary"
@@ -59,14 +58,9 @@ type Status struct {
 	LeaderAddr string
 }
 
-type proposal struct {
-	commit func() error
-	err    error
-	done   chan struct{}
-}
-
 type Node struct {
 	db    *bitcask.DB
+	dir   string
 	raft  *raft.Raft
 	store *wal.WAL
 	base  uint64
@@ -74,10 +68,8 @@ type Node struct {
 
 	flushMu sync.RWMutex
 
-	mu      sync.Mutex
-	pending map[uint64]*proposal
-	epoch   chan struct{}
-	ready   uint64
+	mu    sync.Mutex
+	ready uint64
 
 	stop chan struct{}
 	wg   sync.WaitGroup
@@ -101,10 +93,10 @@ func ParsePeers(s string) (map[string]string, error) {
 func Open(db *bitcask.DB, cfg Config) (*Node, error) {
 	rc := raft.DefaultConfig()
 	rc.SnapshotThreshold = snapshotThreshold
-	return open(db, cfg, rc)
+	return open(db, cfg, rc, wal.DefaultSegmentSize)
 }
 
-func open(db *bitcask.DB, cfg Config, rc *raft.Config) (*Node, error) {
+func open(db *bitcask.DB, cfg Config, rc *raft.Config, segmentSize int) (*Node, error) {
 	addr, ok := cfg.Peers[cfg.ID]
 	if !ok {
 		return nil, fmt.Errorf("replica: node %q is not in the peer list", cfg.ID)
@@ -115,15 +107,16 @@ func open(db *bitcask.DB, cfg Config, rc *raft.Config) (*Node, error) {
 	}
 	logger := hclog.New(&hclog.LoggerOptions{Name: "raft", Level: hclog.Warn, Output: out})
 	rc.LocalID = raft.ServerID(cfg.ID)
+	rc.BatchApplyCh = true
 	rc.Logger = logger
-	rc.NoSnapshotRestoreOnStart = db.Len() > 0
+	rc.NoSnapshotRestoreOnStart = db.Len() > 0 && !fileExists(filepath.Join(cfg.Dir, restoringMarker))
 	if _, err := os.Stat(filepath.Join(cfg.Dir, "raft.db")); err == nil {
 		return nil, ErrOldRaftLog
 	}
 	if err := os.MkdirAll(cfg.Dir, 0o755); err != nil {
 		return nil, err
 	}
-	snaps, err := raft.NewFileSnapshotStoreWithLogger(cfg.Dir, 2, logger)
+	snaps, err := newLinkStore(cfg.Dir, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +131,7 @@ func open(db *bitcask.DB, cfg Config, rc *raft.Config) (*Node, error) {
 	if cfg.UnsafeNoFsync {
 		vfs = noSyncFS{vfs}
 	}
-	store, err := wal.Open(walDir, wal.WithLogger(logger), wal.WithSegmentFiler(segment.NewFiler(walDir, vfs)))
+	store, err := wal.Open(walDir, wal.WithLogger(logger), wal.WithSegmentFiler(segment.NewFiler(walDir, vfs)), wal.WithSegmentSize(segmentSize))
 	if err != nil {
 		return nil, err
 	}
@@ -162,12 +155,11 @@ func open(db *bitcask.DB, cfg Config, rc *raft.Config) (*Node, error) {
 		return nil, err
 	}
 	n := &Node{
-		db:      db,
-		store:   store,
-		base:    binary.LittleEndian.Uint64(seed[:]),
-		pending: make(map[uint64]*proposal),
-		epoch:   make(chan struct{}),
-		stop:    make(chan struct{}),
+		db:    db,
+		dir:   cfg.Dir,
+		store: store,
+		base:  binary.LittleEndian.Uint64(seed[:]),
+		stop:  make(chan struct{}),
 	}
 	if n.raft, err = raft.NewRaft(rc, n, store, store, snaps, trans); err != nil {
 		trans.Close()
@@ -222,10 +214,9 @@ func (n *Node) watch() {
 		case leader = <-n.raft.LeaderCh():
 		}
 		n.mu.Lock()
-		close(n.epoch)
-		n.epoch = make(chan struct{})
 		n.ready = 0
 		n.mu.Unlock()
+		n.db.DropProposed()
 		if !leader {
 			continue
 		}
@@ -241,62 +232,65 @@ func (n *Node) watch() {
 	}
 }
 
-func (n *Node) lease() (uint64, <-chan struct{}, error) {
+func (n *Node) lease() (uint64, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.ready == 0 || n.ready != n.raft.CurrentTerm() || n.raft.State() != raft.Leader {
-		return 0, nil, ErrNotLeader
+		return 0, ErrNotLeader
 	}
-	return n.ready, n.epoch, nil
+	return n.ready, nil
 }
 
 func (n *Node) Update(scope bitcask.Scope, fn func(tx *bitcask.Tx) error) error {
 	n.flushMu.RLock()
 	defer n.flushMu.RUnlock()
-	term, epoch, err := n.lease()
+	term, err := n.lease()
 	if err != nil {
 		return err
 	}
-	return n.db.UpdateVia(scope, fn, func(ops []bitcask.Op, commit func() error) error {
-		if len(ops) == 0 {
-			return commit()
-		}
-		return n.propose(term, epoch, kindOps, ops, commit)
+	var f raft.ApplyFuture
+	err = n.db.Propose(scope, term, fn, func(ops []bitcask.Op) (uint64, error) {
+		id := n.base + n.seq.Add(1)
+		f = n.raft.Apply(encodeEntry(kindOps, term, id, ops), 0)
+		return id, nil
 	})
+	if err != nil || f == nil {
+		return err
+	}
+	return n.wait(f)
 }
 
 func (n *Node) Flush() error {
 	n.flushMu.Lock()
 	defer n.flushMu.Unlock()
-	term, epoch, err := n.lease()
+	term, err := n.lease()
 	if err != nil {
 		return err
 	}
-	return n.propose(term, epoch, kindFlush, nil, n.db.Flush)
+	return n.wait(n.raft.Apply(encodeEntry(kindFlush, term, n.base+n.seq.Add(1), nil), 0))
 }
 
-func (n *Node) propose(term uint64, epoch <-chan struct{}, kind byte, ops []bitcask.Op, commit func() error) error {
-	id := n.base + n.seq.Add(1)
-	p := &proposal{commit: commit, done: make(chan struct{})}
-	n.mu.Lock()
-	n.pending[id] = p
-	n.mu.Unlock()
-	n.raft.Apply(encodeEntry(kind, term, id, ops), 0)
+func (n *Node) wait(f raft.ApplyFuture) error {
+	done := make(chan error, 1)
+	go func() { done <- f.Error() }()
+	var err error
 	select {
-	case <-p.done:
-		return p.err
-	case <-epoch:
+	case err = <-done:
 	case <-n.stop:
-	}
-	n.mu.Lock()
-	_, waiting := n.pending[id]
-	delete(n.pending, id)
-	n.mu.Unlock()
-	if waiting {
 		return ErrLeadershipLost
 	}
-	<-p.done
-	return p.err
+	switch {
+	case errors.Is(err, raft.ErrNotLeader):
+		return ErrNotLeader
+	case err != nil:
+		return ErrLeadershipLost
+	}
+	switch err, _ := f.Response().(error); {
+	case errors.Is(err, errStale):
+		return ErrLeadershipLost
+	default:
+		return err
+	}
 }
 
 func (n *Node) Apply(l *raft.Log) any {
@@ -307,16 +301,17 @@ func (n *Node) ApplyBatch(logs []*raft.Log) []any {
 	out := make([]any, len(logs))
 	var ops []bitcask.Op
 	var merged []int
+	var upTo uint64
 	flush := func() {
 		if len(merged) == 0 {
 			return
 		}
-		if err := n.db.Apply(ops); err != nil {
+		if err := n.db.Apply(ops, upTo); err != nil {
 			for _, i := range merged {
 				out[i] = err
 			}
 		}
-		ops, merged = ops[:0], merged[:0]
+		ops, merged, upTo = ops[:0], merged[:0], 0
 	}
 	for i, l := range logs {
 		if l.Type != raft.LogCommand {
@@ -331,87 +326,23 @@ func (n *Node) ApplyBatch(logs []*raft.Log) []any {
 			out[i] = errStale
 			continue
 		}
-		n.mu.Lock()
-		p := n.pending[id]
-		delete(n.pending, id)
-		n.mu.Unlock()
-		switch {
-		case p != nil:
-			flush()
-			p.err = p.commit()
-			close(p.done)
-			out[i] = p.err
-		case kind == kindFlush:
+		if kind == kindFlush {
 			flush()
 			out[i] = n.db.Flush()
-		default:
-			decoded, err := decodeOps(body)
-			if err != nil {
-				out[i] = err
-				continue
-			}
-			ops = append(ops, decoded...)
-			merged = append(merged, i)
+			continue
 		}
+		decoded, err := decodeOps(body)
+		if err != nil {
+			out[i] = err
+			continue
+		}
+		ops = append(ops, decoded...)
+		merged = append(merged, i)
+		upTo = max(upTo, id)
 	}
 	flush()
 	return out
 }
-
-func (n *Node) Snapshot() (raft.FSMSnapshot, error) {
-	return dump{n.db}, nil
-}
-
-func (n *Node) Restore(rc io.ReadCloser) error {
-	defer rc.Close()
-	if err := n.db.Flush(); err != nil {
-		return err
-	}
-	r := bufio.NewReader(rc)
-	batch := make([]bitcask.Op, 0, restoreBatch)
-	for {
-		op, err := readOp(r)
-		if err == io.EOF {
-			return n.db.Apply(batch)
-		}
-		if err != nil {
-			return err
-		}
-		if batch = append(batch, op); len(batch) == restoreBatch {
-			if err := n.db.Apply(batch); err != nil {
-				return err
-			}
-			batch = batch[:0]
-		}
-	}
-}
-
-type dump struct {
-	db *bitcask.DB
-}
-
-func (d dump) Persist(sink raft.SnapshotSink) error {
-	w := bufio.NewWriter(sink)
-	var buf []byte
-	err := d.db.Sync()
-	if err == nil {
-		err = d.db.Dump(func(op bitcask.Op) error {
-			buf = appendOp(buf[:0], op)
-			_, err := w.Write(buf)
-			return err
-		})
-	}
-	if err == nil {
-		err = w.Flush()
-	}
-	if err != nil {
-		sink.Cancel()
-		return err
-	}
-	return sink.Close()
-}
-
-func (dump) Release() {}
 
 func encodeEntry(kind byte, term, id uint64, ops []bitcask.Op) []byte {
 	size := 1 + 2*binary.MaxVarintLen64
@@ -538,4 +469,9 @@ type noSyncFile struct {
 
 func (noSyncFile) Sync() error {
 	return nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

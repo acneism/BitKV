@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	Version      = "0.8.0"
+	Version      = "0.9.0"
 	redisVersion = "7.2.0"
 )
 
@@ -202,7 +202,7 @@ func (s *Server) batchable(c *client, args [][]byte) (command, bool) {
 	if len(args) == 0 || c.multi || !c.authed {
 		return command{}, false
 	}
-	cmd, ok := commands[strings.ToLower(string(args[0]))]
+	cmd, ok := lookup(args[0])
 	if !ok || cmd.kind != kindWrite || cmd.global || !cmd.validArity(len(args)) {
 		return command{}, false
 	}
@@ -247,14 +247,13 @@ func (s *Server) recoverCommand(c *client, name []byte) {
 
 func (s *Server) execute(c *client, args [][]byte) {
 	defer s.recoverCommand(c, args[0])
-	name := strings.ToLower(string(args[0]))
-	cmd, ok := commands[name]
+	cmd, ok := lookup(args[0])
 	switch {
 	case !ok:
 		c.reject(errorReply(unknownCommand(args)))
 		return
 	case !cmd.validArity(len(args)):
-		c.reject(errorReply("ERR wrong number of arguments for '" + name + "' command"))
+		c.reject(errorReply("ERR wrong number of arguments for '" + strings.ToLower(string(args[0])) + "' command"))
 		return
 	case !c.authed && !cmd.noAuth:
 		c.reject(errorReply("NOAUTH Authentication required."))
@@ -297,7 +296,8 @@ func (s *Server) run(c *client, cmd command, args [][]byte) reply {
 		r, err = cmd.tx(tx, args)
 		return err
 	}
-	scope := bitcask.Keys(cmd.keys.extract(args, nil)...)
+	var kb [8]string
+	scope := bitcask.Keys(cmd.keys.extract(args, kb[:0])...)
 	if cmd.global {
 		scope = bitcask.Shardwise()
 	}

@@ -63,3 +63,7 @@ func initWalMeta(dir string) error {
 	}
 	return os.Rename(tmp, name)
 }
+
+func syncDir(string) error {
+	return nil
+}

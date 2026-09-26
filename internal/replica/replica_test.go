@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +26,8 @@ type testNode struct {
 }
 
 var raftConfig = testRaftConfig
+
+var testSegmentSize = 8 << 10
 
 func testRaftConfig() *raft.Config {
 	c := raft.DefaultConfig()
@@ -46,7 +49,7 @@ func (tn *testNode) start(t testing.TB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := open(db, Config{ID: tn.id, Peers: tn.peers, Dir: filepath.Join(tn.dir, "raft"), UnsafeNoFsync: tn.unsafe}, raftConfig())
+	n, err := open(db, Config{ID: tn.id, Peers: tn.peers, Dir: filepath.Join(tn.dir, "raft"), UnsafeNoFsync: tn.unsafe}, raftConfig(), testSegmentSize)
 	if err != nil {
 		db.Close()
 		t.Fatal(err)
@@ -122,7 +125,7 @@ func leader(t testing.TB, nodes []*testNode) *testNode {
 			if tn.node == nil {
 				continue
 			}
-			if _, _, err := tn.node.lease(); err == nil {
+			if _, err := tn.node.lease(); err == nil {
 				found = tn
 				return true
 			}
@@ -253,7 +256,7 @@ func TestRefusesOldRaftLog(t *testing.T) {
 	must(t, err)
 	defer db.Close()
 	peers := map[string]string{"n0": freeAddr(t)}
-	if _, err := open(db, Config{ID: "n0", Peers: peers, Dir: filepath.Join(dir, "raft")}, testRaftConfig()); !errors.Is(err, ErrOldRaftLog) {
+	if _, err := open(db, Config{ID: "n0", Peers: peers, Dir: filepath.Join(dir, "raft")}, testRaftConfig(), testSegmentSize); !errors.Is(err, ErrOldRaftLog) {
 		t.Fatalf("open with raft.db: %v, want ErrOldRaftLog", err)
 	}
 }
@@ -268,7 +271,7 @@ func TestApplyBatchKeepsLogOrder(t *testing.T) {
 	db, err := bitcask.Open(filepath.Join(t.TempDir(), "data"), bitcask.DefaultOptions())
 	must(t, err)
 	defer db.Close()
-	n := &Node{db: db, pending: make(map[uint64]*proposal)}
+	n := &Node{db: db}
 	var id uint64
 	entry := func(kind byte, term, logTerm uint64, ops ...bitcask.Op) *raft.Log {
 		id++
@@ -296,4 +299,86 @@ func TestApplyBatchKeepsLogOrder(t *testing.T) {
 			t.Fatalf("%s = %q, want %q", k, got, want)
 		}
 	}
+}
+
+func TestInterruptedRestoreResumes(t *testing.T) {
+	nodes := newCluster(t, 3, false)
+	l := leader(t, nodes)
+	keys := make([]string, 60)
+	for i := range keys {
+		keys[i] = "k" + strconv.Itoa(i)
+		must(t, put(l, keys[i], "v"))
+	}
+	eventually(t, "replication", converged(nodes, "k59", "v", len(keys)))
+	f := nodes[0]
+	if f == l {
+		f = nodes[1]
+	}
+	must(t, f.node.raft.Snapshot().Error())
+	f.stop(t)
+	db, err := bitcask.Open(filepath.Join(f.dir, "data"), bitcask.DefaultOptions())
+	must(t, err)
+	must(t, db.Update(bitcask.Keys(keys[:30]...), func(tx *bitcask.Tx) error {
+		for _, k := range keys[:30] {
+			tx.Delete(k)
+		}
+		return nil
+	}))
+	must(t, db.Close())
+	marker := filepath.Join(f.dir, "raft", restoringMarker)
+	must(t, os.WriteFile(marker, nil, 0o644))
+	f.start(t)
+	eventually(t, "interrupted restore to resume", converged(nodes, "k0", "v", len(keys)))
+	if fileExists(marker) {
+		t.Fatal("restore marker left behind")
+	}
+	for _, tn := range nodes {
+		entries, _ := os.ReadDir(filepath.Join(tn.dir, "raft", linksDir))
+		if len(entries) > retainSnapshots+1 {
+			t.Fatalf("%s keeps %d snapshot link dirs", tn.id, len(entries))
+		}
+	}
+}
+
+func TestHotKeyFailover(t *testing.T) {
+	nodes := newCluster(t, 3, false)
+	l := leader(t, nodes)
+	var acked, failed atomic.Int64
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				switch err := incr(l, "counter"); {
+				case err == nil:
+					acked.Add(1)
+				default:
+					failed.Add(1)
+					return
+				}
+			}
+		}()
+	}
+	time.Sleep(300 * time.Millisecond)
+	l.stop(t)
+	wg.Wait()
+	next := leader(t, nodes)
+	var got int64
+	eventually(t, "survivors to agree", func() bool {
+		v := get(next, "counter")
+		for _, tn := range nodes {
+			if tn.node != nil && get(tn, "counter") != v {
+				return false
+			}
+		}
+		got, _ = strconv.ParseInt(v, 10, 64)
+		return true
+	})
+	if got < acked.Load() || got > acked.Load()+failed.Load() {
+		t.Fatalf("counter = %d, acked %d, failed %d", got, acked.Load(), failed.Load())
+	}
+	must(t, incr(next, "counter"))
+	l.start(t)
+	eventually(t, "old leader to rejoin", converged(nodes, "counter", strconv.FormatInt(got+1, 10), 1))
 }

@@ -79,12 +79,17 @@ func (df *dataFile) reader() *os.File {
 }
 
 func (df *dataFile) read(offset int64, key string, valueSize uint32) ([]byte, error) {
-	buf := make([]byte, recordSize(len(key), int(valueSize)))
-	end := offset + int64(len(buf))
-	if src := df.cached(end); src != nil {
-		copy(buf, src[offset:end])
-	} else if err := readFull(df.reader(), buf, offset); err != nil {
-		return nil, err
+	n := recordSize(len(key), int(valueSize))
+	end := offset + int64(n)
+	buf := df.cached(end)
+	cached := buf != nil
+	if cached {
+		buf = buf[offset:end]
+	} else {
+		buf = make([]byte, n)
+		if err := readFull(df.reader(), buf, offset); err != nil {
+			return nil, err
+		}
 	}
 	h := decodeHeader(buf)
 	if h.crc != crc32.Checksum(buf[4:], castagnoli) ||
@@ -93,7 +98,11 @@ func (df *dataFile) read(offset int64, key string, valueSize uint32) ([]byte, er
 		string(buf[headerSize:headerSize+len(key)]) != key {
 		return nil, fmt.Errorf("%w: %s at offset %d", ErrCorrupt, fileName(df.id, dataExt), offset)
 	}
-	return buf[headerSize+len(key):], nil
+	value := buf[headerSize+len(key):]
+	if cached {
+		value = append(make([]byte, 0, len(value)), value...)
+	}
+	return value, nil
 }
 
 func parseID(name, ext string) (uint32, bool) {

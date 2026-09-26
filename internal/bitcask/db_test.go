@@ -1147,3 +1147,60 @@ func TestReadsServedFromMemory(t *testing.T) {
 	defer mustClose(t, db)
 	check(db)
 }
+
+func TestProposedWritesVisibility(t *testing.T) {
+	db := mustOpen(t, t.TempDir(), testOptions())
+	defer mustClose(t, db)
+	var published [][]Op
+	propose := func(term uint64, fn func(tx *Tx) error) {
+		t.Helper()
+		err := db.Propose(Keys("k"), term, fn, func(ops []Op) (uint64, error) {
+			published = append(published, ops)
+			return uint64(len(published)), nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	incr := func(tx *Tx) error {
+		v, _, err := tx.Get("k")
+		tx.Put("k", append(v, 'x'), 0)
+		return err
+	}
+	seen := func(term uint64) string {
+		var v []byte
+		propose(term, func(tx *Tx) error {
+			v, _, _ = tx.Get("k")
+			return nil
+		})
+		return string(v)
+	}
+	propose(7, incr)
+	propose(7, incr)
+	if got := seen(7); got != "xx" {
+		t.Fatalf("same term sees %q, want xx", got)
+	}
+	if got := seen(8); got != "" {
+		t.Fatalf("other term sees %q, want nothing", got)
+	}
+	if got, ok := get(t, db, "k"); ok {
+		t.Fatalf("reader sees uncommitted %q", got)
+	}
+	if err := db.Apply(published[0], 1); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := get(t, db, "k"); got != "x" {
+		t.Fatalf("after first apply reader sees %q, want x", got)
+	}
+	if got := seen(7); got != "xx" {
+		t.Fatalf("after first apply same term sees %q, want xx", got)
+	}
+	if err := db.Apply(published[1], 2); err != nil {
+		t.Fatal(err)
+	}
+	propose(7, incr)
+	db.DropProposed()
+	if got := seen(7); got != "xx" {
+		t.Fatalf("after drop same term sees %q, want committed xx", got)
+	}
+}

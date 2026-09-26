@@ -31,6 +31,16 @@ type pendingOp struct {
 	deleted  bool
 }
 
+func (op pendingOp) gone(now int64) bool {
+	return op.deleted || (op.expireAt != 0 && op.expireAt <= now)
+}
+
+type proposedOp struct {
+	pendingOp
+	term uint64
+	id   uint64
+}
+
 type Version struct {
 	exists bool
 	fileID uint32
@@ -44,7 +54,9 @@ type Tx struct {
 	all       bool
 	shardwise bool
 	shards    []int
+	shardBuf  [4]int
 	pending   map[string]pendingOp
+	term      uint64
 	order     []string
 	err       error
 }
@@ -58,9 +70,9 @@ func (db *DB) begin(scope Scope, writable bool) *Tx {
 		}
 	case tx.shardwise:
 	default:
-		tx.shards = make([]int, len(scope.keys))
-		for i, key := range scope.keys {
-			tx.shards[i] = shardIndex(key)
+		tx.shards = tx.shardBuf[:0]
+		for _, key := range scope.keys {
+			tx.shards = append(tx.shards, shardIndex(key))
 		}
 		slices.Sort(tx.shards)
 		tx.shards = slices.Compact(tx.shards)
@@ -113,7 +125,11 @@ func (db *DB) View(scope Scope, fn func(tx *Tx) error) error {
 }
 
 func (db *DB) Update(scope Scope, fn func(tx *Tx) error) error {
-	return db.UpdateVia(scope, fn, nil)
+	waits, err := db.update(scope, fn)
+	if err != nil || len(waits) == 0 {
+		return err
+	}
+	return db.await(waits)
 }
 
 type Op struct {
@@ -123,15 +139,43 @@ type Op struct {
 	Delete   bool
 }
 
-func (db *DB) UpdateVia(scope Scope, fn func(tx *Tx) error, publish func(ops []Op, commit func() error) error) error {
-	waits, err := db.update(scope, fn, publish)
-	if err != nil || len(waits) == 0 {
+func (db *DB) Propose(scope Scope, term uint64, fn func(tx *Tx) error, publish func(ops []Op) (uint64, error)) error {
+	tx := db.begin(scope, true)
+	defer tx.release()
+	tx.term = term
+	if err := db.stateErr(); err != nil {
 		return err
 	}
-	return db.await(waits)
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if tx.err != nil || len(tx.order) == 0 {
+		return tx.err
+	}
+	id, err := publish(tx.ops())
+	if err != nil {
+		return err
+	}
+	for _, key := range tx.order {
+		s := db.kd.shard(key)
+		if s.proposed == nil {
+			s.proposed = make(map[string]proposedOp)
+		}
+		s.proposed[key] = proposedOp{pendingOp: tx.pending[key], term: term, id: id}
+	}
+	return nil
 }
 
-func (db *DB) update(scope Scope, fn func(tx *Tx) error, publish func(ops []Op, commit func() error) error) ([]waitPoint, error) {
+func (db *DB) DropProposed() {
+	for i := range db.kd.shards {
+		s := &db.kd.shards[i]
+		s.mu.Lock()
+		s.proposed = nil
+		s.mu.Unlock()
+	}
+}
+
+func (db *DB) update(scope Scope, fn func(tx *Tx) error) ([]waitPoint, error) {
 	tx := db.begin(scope, true)
 	defer tx.release()
 	if err := db.stateErr(); err != nil {
@@ -143,23 +187,15 @@ func (db *DB) update(scope Scope, fn func(tx *Tx) error, publish func(ops []Op, 
 	if tx.err != nil {
 		return nil, tx.err
 	}
-	if publish == nil {
-		return tx.commit()
-	}
-	var waits []waitPoint
-	err := publish(tx.ops(), func() (err error) {
-		waits, err = tx.commit()
-		return err
-	})
-	return waits, err
+	return tx.commit()
 }
 
-func (db *DB) Apply(ops []Op) error {
+func (db *DB) Apply(ops []Op, upTo uint64) error {
 	keys := make([]string, len(ops))
 	for i, op := range ops {
 		keys[i] = op.Key
 	}
-	return db.Update(Keys(keys...), func(tx *Tx) error {
+	_, err := db.update(Keys(keys...), func(tx *Tx) error {
 		for _, op := range ops {
 			if op.Delete {
 				tx.Delete(op.Key)
@@ -167,8 +203,18 @@ func (db *DB) Apply(ops []Op) error {
 				tx.Put(op.Key, op.Value, op.ExpireAt)
 			}
 		}
+		if upTo == 0 {
+			return nil
+		}
+		for _, op := range ops {
+			s := db.kd.shard(op.Key)
+			if p, ok := s.proposed[op.Key]; ok && p.id <= upTo {
+				delete(s.proposed, op.Key)
+			}
+		}
 		return nil
 	})
+	return err
 }
 
 func (db *DB) Dump(fn func(op Op) error) error {
@@ -234,6 +280,12 @@ func (tx *Tx) Get(key string) ([]byte, bool, error) {
 	if s == nil {
 		return nil, false, ErrNotLocked
 	}
+	if op, ok := tx.proposed(s, key); ok {
+		if op.gone(tx.now) {
+			return nil, false, nil
+		}
+		return op.value, true, nil
+	}
 	e, ok := s.m[key]
 	if !ok || e.expired(tx.now) {
 		return nil, false, nil
@@ -260,11 +312,25 @@ func (tx *Tx) ExpireAt(key string) (int64, bool) {
 }
 
 func (tx *Tx) stored(s *shard, key string) (int64, bool) {
+	if op, ok := tx.proposed(s, key); ok {
+		if op.gone(tx.now) {
+			return 0, false
+		}
+		return op.expireAt, true
+	}
 	e, ok := s.m[key]
 	if !ok || e.expired(tx.now) {
 		return 0, false
 	}
 	return e.expireAt, true
+}
+
+func (tx *Tx) proposed(s *shard, key string) (proposedOp, bool) {
+	if tx.term == 0 {
+		return proposedOp{}, false
+	}
+	op, ok := s.proposed[key]
+	return op, ok && op.term == tx.term
 }
 
 func (tx *Tx) Exists(key string) bool {
@@ -276,6 +342,9 @@ func (tx *Tx) Version(key string) Version {
 	_, s := tx.shardFor(key)
 	if s == nil {
 		return Version{}
+	}
+	if op, ok := tx.proposed(s, key); ok {
+		return Version{exists: !op.gone(tx.now), offset: int64(op.id)}
 	}
 	e, ok := s.m[key]
 	if !ok || e.expired(tx.now) {
@@ -409,7 +478,6 @@ type groupBatch struct {
 
 func (tx *Tx) commit() ([]waitPoint, error) {
 	db := tx.db
-	byGroup := make(map[*logGroup]*groupBatch)
 	var parts []*groupBatch
 	for _, key := range tx.order {
 		if tx.pending[key].deleted {
@@ -424,10 +492,15 @@ func (tx *Tx) commit() ([]waitPoint, error) {
 			}
 		}
 		g := db.groupOfKey(key)
-		gb := byGroup[g]
+		var gb *groupBatch
+		for _, p := range parts {
+			if p.g == g {
+				gb = p
+				break
+			}
+		}
 		if gb == nil {
 			gb = &groupBatch{g: g}
-			byGroup[g] = gb
 			parts = append(parts, gb)
 		}
 		gb.keys = append(gb.keys, key)

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/acneism/BitKV/internal/bitcask"
+	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/raft"
 )
 
@@ -17,7 +18,7 @@ func BenchmarkFollowerApply(b *testing.B) {
 				b.Fatal(err)
 			}
 			defer db.Close()
-			n := &Node{db: db, pending: make(map[uint64]*proposal)}
+			n := &Node{db: db}
 			logs := make([]*raft.Log, b.N)
 			for i := range logs {
 				ops := make([]bitcask.Op, keys)
@@ -39,5 +40,42 @@ func applyAll(n *Node, logs []*raft.Log) {
 		k := min(batch, len(logs))
 		n.ApplyBatch(logs[:k])
 		logs = logs[k:]
+	}
+}
+
+func BenchmarkSnapshotPersist(b *testing.B) {
+	dir := b.TempDir()
+	opts := bitcask.DefaultOptions()
+	opts.Sync = bitcask.SyncNo
+	db, err := bitcask.Open(filepath.Join(dir, "data"), opts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer db.Close()
+	value := make([]byte, 100)
+	for i := 0; i < 200_000; i += 1000 {
+		ops := make([]bitcask.Op, 1000)
+		for j := range ops {
+			ops[j] = bitcask.Op{Key: strconv.Itoa(i + j), Value: value}
+		}
+		if err := db.Apply(ops, 0); err != nil {
+			b.Fatal(err)
+		}
+	}
+	store, err := newLinkStore(filepath.Join(dir, "raft"), hclog.NewNullLogger())
+	if err != nil {
+		b.Fatal(err)
+	}
+	n := &Node{db: db}
+	b.ResetTimer()
+	for i := range b.N {
+		sink, err := store.Create(raft.SnapshotVersionMax, uint64(i+1), 1, raft.Configuration{}, 1, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		snap, _ := n.Snapshot()
+		if err := snap.Persist(sink); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

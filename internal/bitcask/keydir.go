@@ -34,6 +34,8 @@ type shard struct {
 	ovMu    sync.Mutex
 	overlay map[string]overlayEntry
 
+	proposed map[string]proposedOp
+
 	_ [64]byte
 }
 

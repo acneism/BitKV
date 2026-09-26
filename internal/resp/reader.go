@@ -14,6 +14,8 @@ const (
 	maxArgs      = 1 << 20
 	smallBulk    = 64 << 10
 	readerBuffer = 16 << 10
+	slabSize     = 16 << 10
+	slabMaxBulk  = 1 << 10
 )
 
 type ProtocolError struct {
@@ -27,6 +29,7 @@ func (e *ProtocolError) Error() string {
 type Reader struct {
 	br      *bufio.Reader
 	maxBulk int
+	slab    []byte
 }
 
 func NewReader(r io.Reader, maxBulk int) *Reader {
@@ -142,7 +145,7 @@ func (r *Reader) readLine() ([]byte, error) {
 func (r *Reader) readBulk(n int) ([]byte, error) {
 	var b []byte
 	if n <= smallBulk {
-		b = make([]byte, n+2)
+		b = r.alloc(n + 2)
 		if _, err := io.ReadFull(r.br, b); err != nil {
 			return nil, err
 		}
@@ -191,4 +194,16 @@ func parseInt(b []byte) (int, bool) {
 		n = -n
 	}
 	return int(n), true
+}
+
+func (r *Reader) alloc(n int) []byte {
+	if n > slabMaxBulk {
+		return make([]byte, n)
+	}
+	if len(r.slab) < n {
+		r.slab = make([]byte, slabSize)
+	}
+	b := r.slab[:n:n]
+	r.slab = r.slab[n:]
+	return b
 }
