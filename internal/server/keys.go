@@ -1,0 +1,211 @@
+package server
+
+import (
+	"math"
+	"strconv"
+	"strings"
+
+	"github.com/acneism/BitKV/internal/bitcask"
+)
+
+func cmdDel(tx *bitcask.Tx, args [][]byte) (reply, error) {
+	var deleted intReply
+	for _, key := range args[1:] {
+		if tx.Delete(string(key)) {
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
+func cmdExists(tx *bitcask.Tx, args [][]byte) (reply, error) {
+	var count intReply
+	for _, key := range args[1:] {
+		if tx.Exists(string(key)) {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func cmdType(tx *bitcask.Tx, args [][]byte) (reply, error) {
+	if tx.Exists(string(args[1])) {
+		return statusReply("string"), nil
+	}
+	return statusReply("none"), nil
+}
+
+func cmdDBSize(tx *bitcask.Tx, args [][]byte) (reply, error) {
+	return intReply(tx.Len()), nil
+}
+
+func globMatcher(pattern string) func(string) bool {
+	if pattern == "*" {
+		return nil
+	}
+	return func(key string) bool { return matchGlob(pattern, key) }
+}
+
+func cmdKeys(tx *bitcask.Tx, args [][]byte) (reply, error) {
+	_, keys := tx.Scan(0, math.MaxInt, globMatcher(string(args[1])))
+	return stringsReply(keys), nil
+}
+
+func cmdScan(tx *bitcask.Tx, args [][]byte) (reply, error) {
+	cursor, err := strconv.ParseUint(string(args[1]), 10, 64)
+	if err != nil {
+		return errorReply("ERR invalid cursor"), nil
+	}
+	count := 10
+	pattern := "*"
+	onlyStrings := true
+	for i := 2; i < len(args); i += 2 {
+		if i+1 >= len(args) {
+			return errorReply(errSyntax), nil
+		}
+		switch upper(args[i]) {
+		case "MATCH":
+			pattern = string(args[i+1])
+		case "COUNT":
+			n, ok := parseInt(args[i+1])
+			if !ok {
+				return errorReply(errNotInteger), nil
+			}
+			if n < 1 {
+				return errorReply(errSyntax), nil
+			}
+			count = int(min(n, math.MaxInt32))
+		case "TYPE":
+			onlyStrings = strings.EqualFold(string(args[i+1]), "string")
+		default:
+			return errorReply(errSyntax), nil
+		}
+	}
+	match := globMatcher(pattern)
+	if !onlyStrings {
+		match = func(string) bool { return false }
+	}
+	next, keys := tx.Scan(cursor, count, match)
+	return arrayReply{bulkReply(strconv.FormatUint(next, 10)), stringsReply(keys)}, nil
+}
+
+func cmdExpire(tx *bitcask.Tx, args [][]byte) (reply, error) {
+	return expireGeneric(tx, args, 1000, false)
+}
+
+func cmdPExpire(tx *bitcask.Tx, args [][]byte) (reply, error) {
+	return expireGeneric(tx, args, 1, false)
+}
+
+func cmdExpireAt(tx *bitcask.Tx, args [][]byte) (reply, error) {
+	return expireGeneric(tx, args, 1000, true)
+}
+
+func cmdPExpireAt(tx *bitcask.Tx, args [][]byte) (reply, error) {
+	return expireGeneric(tx, args, 1, true)
+}
+
+func expireTime(now, n, unit int64, absolute bool) (int64, bool) {
+	if n > math.MaxInt64/unit || n < math.MinInt64/unit {
+		return 0, false
+	}
+	v := n * unit
+	if absolute {
+		return v, true
+	}
+	if (v > 0 && now > math.MaxInt64-v) || (v < 0 && now < math.MinInt64-v) {
+		return 0, false
+	}
+	return now + v, true
+}
+
+func expireGeneric(tx *bitcask.Tx, args [][]byte, unit int64, absolute bool) (reply, error) {
+	n, ok := parseInt(args[2])
+	if !ok {
+		return errorReply(errNotInteger), nil
+	}
+	var nx, xx, gt, lt bool
+	for _, a := range args[3:] {
+		switch upper(a) {
+		case "NX":
+			nx = true
+		case "XX":
+			xx = true
+		case "GT":
+			gt = true
+		case "LT":
+			lt = true
+		default:
+			return errorReply("ERR Unsupported option " + truncate(a, 128)), nil
+		}
+	}
+	if nx && (xx || gt || lt) {
+		return errorReply("ERR NX and XX, GT or LT options at the same time are not compatible"), nil
+	}
+	if gt && lt {
+		return errorReply("ERR GT and LT options at the same time are not compatible"), nil
+	}
+	when, ok := expireTime(tx.Now(), n, unit, absolute)
+	if !ok {
+		return errorReply("ERR invalid expire time in '" + strings.ToLower(string(args[0])) + "' command"), nil
+	}
+	key := string(args[1])
+	current, exists := tx.ExpireAt(key)
+	if !exists {
+		return intReply(0), nil
+	}
+	switch {
+	case nx && current != 0,
+		xx && current == 0,
+		gt && (current == 0 || when <= current),
+		lt && current != 0 && when >= current:
+		return intReply(0), nil
+	}
+	if when <= tx.Now() {
+		tx.Delete(key)
+		return intReply(1), nil
+	}
+	value, _, err := tx.Get(key)
+	if err != nil {
+		return nil, err
+	}
+	tx.Put(key, value, when)
+	return intReply(1), nil
+}
+
+func cmdTTL(tx *bitcask.Tx, args [][]byte) (reply, error) {
+	return ttlGeneric(tx, args[1], false), nil
+}
+
+func cmdPTTL(tx *bitcask.Tx, args [][]byte) (reply, error) {
+	return ttlGeneric(tx, args[1], true), nil
+}
+
+func ttlGeneric(tx *bitcask.Tx, key []byte, millis bool) reply {
+	expireAt, exists := tx.ExpireAt(string(key))
+	switch {
+	case !exists:
+		return intReply(-2)
+	case expireAt == 0:
+		return intReply(-1)
+	}
+	left := max(expireAt-tx.Now(), 0)
+	if !millis {
+		left = (left + 500) / 1000
+	}
+	return intReply(left)
+}
+
+func cmdPersist(tx *bitcask.Tx, args [][]byte) (reply, error) {
+	key := string(args[1])
+	expireAt, exists := tx.ExpireAt(key)
+	if !exists || expireAt == 0 {
+		return intReply(0), nil
+	}
+	value, _, err := tx.Get(key)
+	if err != nil {
+		return nil, err
+	}
+	tx.Put(key, value, 0)
+	return intReply(1), nil
+}
