@@ -386,6 +386,23 @@ func cmdInfo(s *Server, c *client, args [][]byte) reply {
 	line("total_commands_processed:%d", s.processed.Load())
 	line("expired_keys:%d", st.ExpiredKeys)
 	line("")
+	line("# Replication")
+	if rep := s.cfg.Replica; rep != nil {
+		rs := rep.Status()
+		role := "slave"
+		if rs.State == "Leader" {
+			role = "master"
+		}
+		line("role:%s", role)
+		line("raft_state:%s", rs.State)
+		line("raft_term:%d", rs.Term)
+		line("raft_applied_index:%d", rs.Applied)
+		line("raft_leader_id:%s", rs.LeaderID)
+		line("raft_leader_addr:%s", rs.LeaderAddr)
+	} else {
+		line("role:master")
+	}
+	line("")
 	line("# Keyspace")
 	if st.Keys > 0 {
 		line("db0:keys=%d,expires=%d,avg_ttl=0", st.Keys, st.KeysWithTTL)
@@ -402,7 +419,7 @@ func cmdFlush(s *Server, c *client, args [][]byte) reply {
 			return errorReply(errSyntax)
 		}
 	}
-	if err := s.db.Flush(); err != nil {
+	if err := s.flush(); err != nil {
 		return storageError(err)
 	}
 	return okReply
