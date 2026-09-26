@@ -7,10 +7,12 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/acneism/BitKV/internal/bitcask"
+	"github.com/acneism/BitKV/internal/replica"
 	"github.com/acneism/BitKV/internal/server"
 )
 
@@ -20,6 +22,9 @@ type config struct {
 	fsync       string
 	maxBulk     int
 	requirePass string
+	raftID      string
+	raftPeers   string
+	raftDir     string
 	opts        bitcask.Options
 }
 
@@ -35,6 +40,9 @@ func main() {
 	flag.IntVar(&cfg.opts.Logs, "logs", 0, "number of parallel data logs for a new database (0 means 4; an existing database keeps its own)")
 	flag.IntVar(&cfg.maxBulk, "proto-max-bulk-len", 512<<20, "maximum bulk string length in bytes")
 	flag.StringVar(&cfg.requirePass, "requirepass", "", "password clients must AUTH with (default from BITKV_REQUIREPASS)")
+	flag.StringVar(&cfg.raftID, "raft-id", "", "raft node id; enables replication")
+	flag.StringVar(&cfg.raftPeers, "raft-peers", "", "all raft nodes including this one: id=host:port,id=host:port")
+	flag.StringVar(&cfg.raftDir, "raft-dir", "", "raft log and snapshot directory (default <dir>/raft)")
 	flag.Parse()
 	if cfg.requirePass == "" {
 		cfg.requirePass = os.Getenv("BITKV_REQUIREPASS")
@@ -62,15 +70,24 @@ func run(logger *slog.Logger, cfg config) error {
 	st := db.Stats()
 	logger.Info("database loaded", "dir", cfg.dir, "keys", st.Keys, "logs", st.Logs, "files", st.DataFiles, "took", time.Since(started).Round(time.Millisecond))
 
+	var rep *replica.Node
+	if cfg.raftID != "" {
+		if rep, err = openReplica(cfg, db); err != nil {
+			db.Close()
+			return err
+		}
+		logger.Info("raft started", "id", cfg.raftID, "peers", cfg.raftPeers)
+	}
+
 	ln, err := net.Listen("tcp", cfg.addr)
 	if err != nil {
-		db.Close()
+		closeStore(rep, db)
 		return err
 	}
 	if cfg.requirePass == "" && !isLoopback(ln.Addr()) {
 		logger.Warn("listening on a non-loopback address without a password; set -requirepass", "addr", ln.Addr().String())
 	}
-	srv := server.New(db, server.Config{MaxBulkLen: cfg.maxBulk, RequirePass: cfg.requirePass, Logger: logger})
+	srv := server.New(db, server.Config{MaxBulkLen: cfg.maxBulk, RequirePass: cfg.requirePass, Logger: logger, Replica: rep})
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
 	logger.Info("ready to accept connections", "addr", ln.Addr().String(), "appendfsync", policy.String(),
@@ -87,7 +104,7 @@ func run(logger *slog.Logger, cfg config) error {
 		}
 	}
 	srv.Close()
-	if cerr := db.Close(); cerr != nil && err == nil {
+	if cerr := closeStore(rep, db); cerr != nil && err == nil {
 		err = cerr
 	}
 	if err == nil {
@@ -99,4 +116,27 @@ func run(logger *slog.Logger, cfg config) error {
 func isLoopback(addr net.Addr) bool {
 	tcp, ok := addr.(*net.TCPAddr)
 	return ok && tcp.IP.IsLoopback()
+}
+
+func openReplica(cfg config, db *bitcask.DB) (*replica.Node, error) {
+	peers, err := replica.ParsePeers(cfg.raftPeers)
+	if err != nil {
+		return nil, err
+	}
+	dir := cfg.raftDir
+	if dir == "" {
+		dir = filepath.Join(cfg.dir, "raft")
+	}
+	return replica.Open(db, replica.Config{ID: cfg.raftID, Peers: peers, Dir: dir, LogOutput: os.Stderr})
+}
+
+func closeStore(rep *replica.Node, db *bitcask.DB) error {
+	var err error
+	if rep != nil {
+		err = rep.Close()
+	}
+	if cerr := db.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }

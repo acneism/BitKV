@@ -1,6 +1,11 @@
 package server
 
-import "github.com/acneism/BitKV/internal/resp"
+import (
+	"errors"
+
+	"github.com/acneism/BitKV/internal/replica"
+	"github.com/acneism/BitKV/internal/resp"
+)
 
 type reply interface {
 	writeTo(w *resp.Writer)
@@ -61,5 +66,8 @@ func boolReply(b bool) intReply {
 }
 
 func storageError(err error) errorReply {
+	if errors.Is(err, replica.ErrNotLeader) {
+		return errorReply("READONLY You can't write against a read only replica.")
+	}
 	return errorReply("ERR " + err.Error())
 }

@@ -113,14 +113,25 @@ func (db *DB) View(scope Scope, fn func(tx *Tx) error) error {
 }
 
 func (db *DB) Update(scope Scope, fn func(tx *Tx) error) error {
-	waits, err := db.update(scope, fn)
+	return db.UpdateVia(scope, fn, nil)
+}
+
+type Op struct {
+	Key      string
+	Value    []byte
+	ExpireAt int64
+	Delete   bool
+}
+
+func (db *DB) UpdateVia(scope Scope, fn func(tx *Tx) error, publish func(ops []Op, commit func() error) error) error {
+	waits, err := db.update(scope, fn, publish)
 	if err != nil || len(waits) == 0 {
 		return err
 	}
 	return db.await(waits)
 }
 
-func (db *DB) update(scope Scope, fn func(tx *Tx) error) ([]waitPoint, error) {
+func (db *DB) update(scope Scope, fn func(tx *Tx) error, publish func(ops []Op, commit func() error) error) ([]waitPoint, error) {
 	tx := db.begin(scope, true)
 	defer tx.release()
 	if err := db.stateErr(); err != nil {
@@ -132,7 +143,69 @@ func (db *DB) update(scope Scope, fn func(tx *Tx) error) ([]waitPoint, error) {
 	if tx.err != nil {
 		return nil, tx.err
 	}
-	return tx.commit()
+	if publish == nil {
+		return tx.commit()
+	}
+	var waits []waitPoint
+	err := publish(tx.ops(), func() (err error) {
+		waits, err = tx.commit()
+		return err
+	})
+	return waits, err
+}
+
+func (db *DB) Apply(ops []Op) error {
+	keys := make([]string, len(ops))
+	for i, op := range ops {
+		keys[i] = op.Key
+	}
+	return db.Update(Keys(keys...), func(tx *Tx) error {
+		for _, op := range ops {
+			if op.Delete {
+				tx.Delete(op.Key)
+			} else {
+				tx.Put(op.Key, op.Value, op.ExpireAt)
+			}
+		}
+		return nil
+	})
+}
+
+func (db *DB) Dump(fn func(op Op) error) error {
+	now := db.nowMs()
+	for i := range db.kd.shards {
+		s := &db.kd.shards[i]
+		g := db.groupOfShard(i)
+		var ops []Op
+		s.mu.RLock()
+		for key, e := range s.m {
+			if e.expired(now) {
+				continue
+			}
+			v, err := g.readEntry(s, key, e)
+			if err != nil {
+				s.mu.RUnlock()
+				return err
+			}
+			ops = append(ops, Op{Key: key, Value: v, ExpireAt: e.expireAt})
+		}
+		s.mu.RUnlock()
+		for _, op := range ops {
+			if err := fn(op); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (tx *Tx) ops() []Op {
+	ops := make([]Op, len(tx.order))
+	for i, key := range tx.order {
+		p := tx.pending[key]
+		ops[i] = Op{Key: key, Value: p.value, ExpireAt: p.expireAt, Delete: p.deleted}
+	}
+	return ops
 }
 
 func (tx *Tx) Now() int64 {

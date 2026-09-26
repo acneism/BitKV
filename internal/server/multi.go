@@ -106,7 +106,7 @@ func cmdExec(s *Server, c *client, args [][]byte) reply {
 	}
 	var err error
 	if writes {
-		err = s.db.Update(scope, run)
+		err = s.update(scope, run)
 	} else {
 		err = s.db.View(scope, run)
 	}

@@ -12,11 +12,12 @@ import (
 	"time"
 
 	"github.com/acneism/BitKV/internal/bitcask"
+	"github.com/acneism/BitKV/internal/replica"
 	"github.com/acneism/BitKV/internal/resp"
 )
 
 const (
-	Version      = "0.4.0"
+	Version      = "0.5.0"
 	redisVersion = "7.2.0"
 )
 
@@ -26,6 +27,7 @@ type Config struct {
 	MaxBulkLen  int
 	RequirePass string
 	Logger      *slog.Logger
+	Replica     *replica.Node
 }
 
 type Server struct {
@@ -251,10 +253,24 @@ func (s *Server) run(c *client, cmd command, args [][]byte) reply {
 	if cmd.kind == kindRead {
 		err = s.db.View(scope, fn)
 	} else {
-		err = s.db.Update(scope, fn)
+		err = s.update(scope, fn)
 	}
 	if err != nil {
 		return storageError(err)
 	}
 	return r
+}
+
+func (s *Server) update(scope bitcask.Scope, fn func(tx *bitcask.Tx) error) error {
+	if s.cfg.Replica != nil {
+		return s.cfg.Replica.Update(scope, fn)
+	}
+	return s.db.Update(scope, fn)
+}
+
+func (s *Server) flush() error {
+	if s.cfg.Replica != nil {
+		return s.cfg.Replica.Flush()
+	}
+	return s.db.Flush()
 }
