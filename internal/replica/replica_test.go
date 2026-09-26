@@ -21,8 +21,9 @@ type testNode struct {
 	dir    string
 	peers  map[string]string
 	db     *bitcask.DB
-	node   *Node
+	node   Replica
 	unsafe bool
+	engine string
 }
 
 var raftConfig = testRaftConfig
@@ -49,7 +50,13 @@ func (tn *testNode) start(t testing.TB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := open(db, Config{ID: tn.id, Peers: tn.peers, Dir: filepath.Join(tn.dir, "raft"), UnsafeNoFsync: tn.unsafe}, raftConfig(), testSegmentSize)
+	cfg := Config{ID: tn.id, Peers: tn.peers, Dir: filepath.Join(tn.dir, "raft"), UnsafeNoFsync: tn.unsafe}
+	var n Replica
+	if tn.engine == EngineOwn {
+		n, err = openOwn(db, cfg, ownTuning)
+	} else {
+		n, err = open(db, cfg, raftConfig(), testSegmentSize)
+	}
 	if err != nil {
 		db.Close()
 		t.Fatal(err)
@@ -71,13 +78,13 @@ func (tn *testNode) stop(t testing.TB) {
 	tn.node = nil
 }
 
-func newCluster(t testing.TB, size int, unsafe bool) []*testNode {
+func newCluster(t testing.TB, engine string, size int, unsafe bool) []*testNode {
 	peers := make(map[string]string)
 	nodes := make([]*testNode, size)
 	for i := range nodes {
 		id := "n" + strconv.Itoa(i)
 		peers[id] = freeAddr(t)
-		nodes[i] = &testNode{id: id, dir: t.TempDir(), peers: peers, unsafe: unsafe}
+		nodes[i] = &testNode{id: id, dir: t.TempDir(), peers: peers, unsafe: unsafe, engine: engine}
 	}
 	for _, tn := range nodes {
 		tn.start(t)
@@ -125,7 +132,7 @@ func leader(t testing.TB, nodes []*testNode) *testNode {
 			if tn.node == nil {
 				continue
 			}
-			if _, err := tn.node.lease(); err == nil {
+			if readyLeader(tn.node) {
 				found = tn
 				return true
 			}
@@ -175,11 +182,11 @@ func converged(nodes []*testNode, key, want string, keys int) func() bool {
 }
 
 func TestConcurrentWritesReplicate(t *testing.T) {
-	eachMode(t, testConcurrentWrites)
+	eachEngineMode(t, testConcurrentWrites)
 }
 
-func testConcurrentWrites(t *testing.T, unsafe bool) {
-	nodes := newCluster(t, 3, unsafe)
+func testConcurrentWrites(t *testing.T, engine string, unsafe bool) {
+	nodes := newCluster(t, engine, 3, unsafe)
 	l := leader(t, nodes)
 	var wg sync.WaitGroup
 	errs := make(chan error, 8)
@@ -216,11 +223,11 @@ func testConcurrentWrites(t *testing.T, unsafe bool) {
 }
 
 func TestCatchUpAndFailover(t *testing.T) {
-	eachMode(t, testCatchUpAndFailover)
+	eachEngineMode(t, testCatchUpAndFailover)
 }
 
-func testCatchUpAndFailover(t *testing.T, unsafe bool) {
-	nodes := newCluster(t, 3, unsafe)
+func testCatchUpAndFailover(t *testing.T, engine string, unsafe bool) {
+	nodes := newCluster(t, engine, 3, unsafe)
 	l := leader(t, nodes)
 	for range 50 {
 		must(t, incr(l, "counter"))
@@ -261,10 +268,25 @@ func TestRefusesOldRaftLog(t *testing.T) {
 	}
 }
 
-func eachMode(t *testing.T, fn func(t *testing.T, unsafe bool)) {
-	for _, unsafe := range []bool{false, true} {
-		t.Run("unsafe-no-fsync="+strconv.FormatBool(unsafe), func(t *testing.T) { fn(t, unsafe) })
+var engines = []string{EngineHashicorp, EngineOwn}
+
+func eachEngineMode(t *testing.T, fn func(t *testing.T, engine string, unsafe bool)) {
+	for _, engine := range engines {
+		for _, unsafe := range []bool{false, true} {
+			t.Run(engine+"/unsafe-no-fsync="+strconv.FormatBool(unsafe), func(t *testing.T) { fn(t, engine, unsafe) })
+		}
 	}
+}
+
+func readyLeader(r Replica) bool {
+	switch n := r.(type) {
+	case *Node:
+		_, err := n.lease()
+		return err == nil
+	case *ownNode:
+		return n.term() != 0
+	}
+	return false
 }
 
 func TestApplyBatchKeepsLogOrder(t *testing.T) {
@@ -302,7 +324,7 @@ func TestApplyBatchKeepsLogOrder(t *testing.T) {
 }
 
 func TestInterruptedRestoreResumes(t *testing.T) {
-	nodes := newCluster(t, 3, false)
+	nodes := newCluster(t, EngineHashicorp, 3, false)
 	l := leader(t, nodes)
 	keys := make([]string, 60)
 	for i := range keys {
@@ -314,7 +336,7 @@ func TestInterruptedRestoreResumes(t *testing.T) {
 	if f == l {
 		f = nodes[1]
 	}
-	must(t, f.node.raft.Snapshot().Error())
+	must(t, f.node.(*Node).raft.Snapshot().Error())
 	f.stop(t)
 	db, err := bitcask.Open(filepath.Join(f.dir, "data"), bitcask.DefaultOptions())
 	must(t, err)
@@ -341,7 +363,13 @@ func TestInterruptedRestoreResumes(t *testing.T) {
 }
 
 func TestHotKeyFailover(t *testing.T) {
-	nodes := newCluster(t, 3, false)
+	for _, engine := range engines {
+		t.Run(engine, func(t *testing.T) { testHotKeyFailover(t, engine) })
+	}
+}
+
+func testHotKeyFailover(t *testing.T, engine string) {
+	nodes := newCluster(t, engine, 3, false)
 	l := leader(t, nodes)
 	var acked, failed atomic.Int64
 	var wg sync.WaitGroup

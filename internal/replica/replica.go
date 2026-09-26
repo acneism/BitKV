@@ -3,6 +3,7 @@ package replica
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -28,6 +29,7 @@ var (
 	ErrLeadershipLost = errors.New("replica: write interrupted by a leadership change, it may or may not be applied")
 	ErrNotEmpty       = errors.New("replica: database has data but no raft state, start the node from an empty directory")
 	ErrOldRaftLog     = errors.New("replica: raft.db from v0.5 found, the raft log is now raft-wal; start the node from an empty directory")
+	ErrOtherEngine    = errors.New("replica: the raft directory was written by the other raft engine; start the node from an empty directory")
 	errStale          = errors.New("replica: entry was proposed in another term")
 	errEntry          = errors.New("replica: malformed log entry")
 )
@@ -42,12 +44,26 @@ const (
 	snapshotThreshold = 1 << 20
 )
 
+const (
+	EngineHashicorp = "hashicorp"
+	EngineOwn       = "own"
+)
+
 type Config struct {
 	ID            string
 	Peers         map[string]string
 	Dir           string
 	LogOutput     io.Writer
 	UnsafeNoFsync bool
+	Engine        string
+	TLS           *tls.Config
+}
+
+type Replica interface {
+	Update(scope bitcask.Scope, fn func(tx *bitcask.Tx) error) error
+	Flush() error
+	Status() Status
+	Close() error
 }
 
 type Status struct {
@@ -90,10 +106,22 @@ func ParsePeers(s string) (map[string]string, error) {
 	return peers, nil
 }
 
-func Open(db *bitcask.DB, cfg Config) (*Node, error) {
-	rc := raft.DefaultConfig()
-	rc.SnapshotThreshold = snapshotThreshold
-	return open(db, cfg, rc, wal.DefaultSegmentSize)
+func Open(db *bitcask.DB, cfg Config) (Replica, error) {
+	switch cfg.Engine {
+	case "", EngineHashicorp:
+		if cfg.TLS != nil {
+			return nil, errors.New("replica: the hashicorp engine does not support TLS")
+		}
+		if fileExists(filepath.Join(cfg.Dir, "wal", "meta")) {
+			return nil, ErrOtherEngine
+		}
+		rc := raft.DefaultConfig()
+		rc.SnapshotThreshold = snapshotThreshold
+		return open(db, cfg, rc, wal.DefaultSegmentSize)
+	case EngineOwn:
+		return openOwn(db, cfg, nil)
+	}
+	return nil, fmt.Errorf("replica: unknown engine %q, want %s or %s", cfg.Engine, EngineHashicorp, EngineOwn)
 }
 
 func open(db *bitcask.DB, cfg Config, rc *raft.Config, segmentSize int) (*Node, error) {
