@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"bitkv/internal/bitcask"
-	"bitkv/internal/resp"
+	"github.com/acneism/BitKV/internal/bitcask"
+	"github.com/acneism/BitKV/internal/resp"
 )
 
 const (

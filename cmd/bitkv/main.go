@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"bitkv/internal/bitcask"
-	"bitkv/internal/server"
+	"github.com/acneism/BitKV/internal/bitcask"
+	"github.com/acneism/BitKV/internal/server"
 )
 
 type config struct {

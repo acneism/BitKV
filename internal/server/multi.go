@@ -1,6 +1,6 @@
 package server
 
-import "bitkv/internal/bitcask"
+import "github.com/acneism/BitKV/internal/bitcask"
 
 type queued struct {
 	cmd  command

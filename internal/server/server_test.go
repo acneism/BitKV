@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"bitkv/internal/bitcask"
-	"bitkv/internal/clock"
+	"github.com/acneism/BitKV/internal/bitcask"
+	"github.com/acneism/BitKV/internal/clock"
 )
 
 var testClock = clock.NewManual(time.Now())

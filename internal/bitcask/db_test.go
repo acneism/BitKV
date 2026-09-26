@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"bitkv/internal/clock"
+	"github.com/acneism/BitKV/internal/clock"
 )
 
 func testOptions() Options {

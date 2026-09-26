@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"bitkv/internal/bitcask"
+	"github.com/acneism/BitKV/internal/bitcask"
 )
 
 const (

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"bitkv/internal/bitcask"
+	"github.com/acneism/BitKV/internal/bitcask"
 )
 
 func cmdDel(tx *bitcask.Tx, args [][]byte) (reply, error) {

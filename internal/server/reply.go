@@ -1,6 +1,6 @@
 package server
 
-import "bitkv/internal/resp"
+import "github.com/acneism/BitKV/internal/resp"
 
 type reply interface {
 	writeTo(w *resp.Writer)
