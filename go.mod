@@ -3,7 +3,7 @@ module github.com/acneism/BitKV
 go 1.26.1
 
 require (
-	github.com/gliedabrennung/raft v0.0.0-00010101000000-000000000000
+	github.com/acneism/raft v0.0.0-00010101000000-000000000000
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/raft v1.8.0
 	github.com/hashicorp/raft-wal v0.5.0
@@ -26,4 +26,4 @@ require (
 	golang.org/x/sys v0.48.0 // indirect
 )
 
-replace github.com/gliedabrennung/raft => ../raft
+replace github.com/acneism/raft => ../raft

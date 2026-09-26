@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/acneism/BitKV/internal/bitcask"
-	ownraft "github.com/gliedabrennung/raft"
+	ownraft "github.com/acneism/raft"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/raft"
 )

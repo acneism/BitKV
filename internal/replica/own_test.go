@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/acneism/BitKV/internal/bitcask"
-	"github.com/gliedabrennung/raft"
-	"github.com/gliedabrennung/raft/node"
-	"github.com/gliedabrennung/raft/transport"
-	raftwal "github.com/gliedabrennung/raft/wal"
+	"github.com/acneism/raft"
+	"github.com/acneism/raft/node"
+	"github.com/acneism/raft/transport"
+	raftwal "github.com/acneism/raft/wal"
 )
 
 var ownTuning = testOwnTuning

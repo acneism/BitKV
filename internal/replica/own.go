@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/acneism/BitKV/internal/bitcask"
-	"github.com/gliedabrennung/raft"
-	"github.com/gliedabrennung/raft/node"
+	"github.com/acneism/raft"
+	"github.com/acneism/raft/node"
 )
 
 type ownNode struct {
