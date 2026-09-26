@@ -5,6 +5,7 @@ import (
 	"os"
 	"runtime"
 	"syscall"
+	"unsafe"
 )
 
 const (
@@ -92,4 +93,27 @@ func writeFull(f *os.File, b []byte, off int64) error {
 		off += int64(n)
 	}
 	return nil
+}
+
+func mmapFile(f *os.File, size int64) ([]byte, error) {
+	if size <= 0 {
+		return nil, nil
+	}
+	h, err := syscall.CreateFileMapping(syscall.Handle(f.Fd()), nil, syscall.PAGE_READONLY, uint32(size>>32), uint32(size), nil)
+	if err != nil {
+		return nil, err
+	}
+	addr, err := syscall.MapViewOfFile(h, syscall.FILE_MAP_READ, 0, 0, uintptr(size))
+	syscall.CloseHandle(h)
+	if err != nil {
+		return nil, err
+	}
+	var b []byte
+	hdr := (*[3]uintptr)(unsafe.Pointer(&b))
+	hdr[0], hdr[1], hdr[2] = addr, uintptr(size), uintptr(size)
+	return b, nil
+}
+
+func munmap(b []byte) error {
+	return syscall.UnmapViewOfFile(uintptr(unsafe.Pointer(unsafe.SliceData(b))))
 }

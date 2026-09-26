@@ -668,11 +668,15 @@ func TestReadDetectsCorruption(t *testing.T) {
 	g := db.groups[0]
 	g.logMu.Lock()
 	df := g.active
+	err := g.rotateLocked(df.id + 1)
 	g.logMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := df.f.WriteAt([]byte("X"), headerSize+1); err != nil {
 		t.Fatal(err)
 	}
-	err := db.View(Keys("k"), func(tx *Tx) error {
+	err = db.View(Keys("k"), func(tx *Tx) error {
 		_, _, err := tx.Get("k")
 		return err
 	})
@@ -1091,4 +1095,55 @@ func runModel(t *testing.T, o Options) {
 	if n := db.Len(); n != len(model) {
 		t.Fatalf("len = %d, want %d", n, len(model))
 	}
+}
+
+func TestReadsServedFromMemory(t *testing.T) {
+	dir := t.TempDir()
+	db := mustOpen(t, dir, testOptions())
+	value := strings.Repeat("v", 100)
+	for i := range 300 {
+		put(t, db, fmt.Sprintf("k%d", i), value, 0)
+	}
+	check := func(db *DB) {
+		t.Helper()
+		g := db.groups[0]
+		g.logMu.Lock()
+		active := g.active
+		g.logMu.Unlock()
+		g.filesMu.RLock()
+		sealed := 0
+		for _, df := range g.files {
+			if df == active {
+				if p := df.mem.Load(); p == nil || int64(len(*p)) != df.written.Load() {
+					t.Fatalf("active file %d is not mirrored in memory", df.id)
+				}
+				continue
+			}
+			sealed++
+			if int64(len(df.mm)) != df.size {
+				t.Fatalf("sealed file %d: mapped %d of %d bytes", df.id, len(df.mm), df.size)
+			}
+		}
+		g.filesMu.RUnlock()
+		if sealed == 0 {
+			t.Fatal("no sealed files to check")
+		}
+		for i := range 300 {
+			if got, ok := get(t, db, fmt.Sprintf("k%d", i)); !ok || got != value {
+				t.Fatalf("k%d = %q, %v", i, got, ok)
+			}
+		}
+	}
+	check(db)
+	for i := range 150 {
+		put(t, db, fmt.Sprintf("k%d", i), value, 0)
+	}
+	if err := db.Merge(); err != nil {
+		t.Fatal(err)
+	}
+	check(db)
+	mustClose(t, db)
+	db = mustOpen(t, dir, testOptions())
+	defer mustClose(t, db)
+	check(db)
 }

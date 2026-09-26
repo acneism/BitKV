@@ -131,15 +131,21 @@ func (g *logGroup) load() (*loadState, error) {
 			return nil, err
 		}
 	}
-	if len(ids) == 0 {
-		return st, g.newActive(1)
+	switch {
+	case len(ids) == 0:
+		err = g.newActive(1)
+	case fileExists(filepath.Join(g.dir, fileName(ids[len(ids)-1], hintExt))):
+		err = g.newActive(ids[len(ids)-1] + 1)
+	default:
+		g.active = g.files[ids[len(ids)-1]]
+		err = g.active.startMirror()
 	}
-	last := ids[len(ids)-1]
-	if fileExists(filepath.Join(g.dir, fileName(last, hintExt))) {
-		return st, g.newActive(last + 1)
+	for _, df := range g.files {
+		if df != g.active {
+			df.seal()
+		}
 	}
-	g.active = g.files[last]
-	return st, nil
+	return st, err
 }
 
 func (st *loadState) loadData(df *dataFile, last bool) (bool, error) {

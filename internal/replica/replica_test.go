@@ -263,3 +263,37 @@ func eachMode(t *testing.T, fn func(t *testing.T, unsafe bool)) {
 		t.Run("unsafe-no-fsync="+strconv.FormatBool(unsafe), func(t *testing.T) { fn(t, unsafe) })
 	}
 }
+
+func TestApplyBatchKeepsLogOrder(t *testing.T) {
+	db, err := bitcask.Open(filepath.Join(t.TempDir(), "data"), bitcask.DefaultOptions())
+	must(t, err)
+	defer db.Close()
+	n := &Node{db: db, pending: make(map[uint64]*proposal)}
+	var id uint64
+	entry := func(kind byte, term, logTerm uint64, ops ...bitcask.Op) *raft.Log {
+		id++
+		return &raft.Log{Type: raft.LogCommand, Term: logTerm, Data: encodeEntry(kind, term, id, ops)}
+	}
+	set := func(k, v string) bitcask.Op { return bitcask.Op{Key: k, Value: []byte(v)} }
+	out := n.ApplyBatch([]*raft.Log{
+		entry(kindOps, 1, 1, set("a", "1"), set("b", "1"), set("x", "1")),
+		{Type: raft.LogConfiguration},
+		entry(kindOps, 1, 1, set("a", "2"), bitcask.Op{Key: "b", Delete: true}),
+		entry(kindOps, 1, 2, set("c", "1")),
+		entry(kindOps, 1, 1, set("b", "3")),
+		entry(kindFlush, 1, 1),
+		entry(kindOps, 1, 1, set("a", "4")),
+		entry(kindOps, 1, 1, set("b", "5"), bitcask.Op{Key: "a", Delete: true}),
+	})
+	for i, want := range []any{nil, nil, nil, errStale, nil, nil, nil, nil} {
+		if out[i] != want {
+			t.Fatalf("response %d = %v, want %v", i, out[i], want)
+		}
+	}
+	tn := &testNode{db: db}
+	for k, want := range map[string]string{"a": "", "b": "5", "c": "", "x": ""} {
+		if got := get(tn, k); got != want {
+			t.Fatalf("%s = %q, want %q", k, got, want)
+		}
+	}
+}

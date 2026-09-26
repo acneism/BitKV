@@ -300,30 +300,62 @@ func (n *Node) propose(term uint64, epoch <-chan struct{}, kind byte, ops []bitc
 }
 
 func (n *Node) Apply(l *raft.Log) any {
-	kind, term, id, body, err := decodeEntry(l.Data)
-	if err != nil {
-		return err
+	return n.ApplyBatch([]*raft.Log{l})[0]
+}
+
+func (n *Node) ApplyBatch(logs []*raft.Log) []any {
+	out := make([]any, len(logs))
+	var ops []bitcask.Op
+	var merged []int
+	flush := func() {
+		if len(merged) == 0 {
+			return
+		}
+		if err := n.db.Apply(ops); err != nil {
+			for _, i := range merged {
+				out[i] = err
+			}
+		}
+		ops, merged = ops[:0], merged[:0]
 	}
-	if term != l.Term {
-		return errStale
+	for i, l := range logs {
+		if l.Type != raft.LogCommand {
+			continue
+		}
+		kind, term, id, body, err := decodeEntry(l.Data)
+		if err != nil {
+			out[i] = err
+			continue
+		}
+		if term != l.Term {
+			out[i] = errStale
+			continue
+		}
+		n.mu.Lock()
+		p := n.pending[id]
+		delete(n.pending, id)
+		n.mu.Unlock()
+		switch {
+		case p != nil:
+			flush()
+			p.err = p.commit()
+			close(p.done)
+			out[i] = p.err
+		case kind == kindFlush:
+			flush()
+			out[i] = n.db.Flush()
+		default:
+			decoded, err := decodeOps(body)
+			if err != nil {
+				out[i] = err
+				continue
+			}
+			ops = append(ops, decoded...)
+			merged = append(merged, i)
+		}
 	}
-	n.mu.Lock()
-	p := n.pending[id]
-	delete(n.pending, id)
-	n.mu.Unlock()
-	if p != nil {
-		p.err = p.commit()
-		close(p.done)
-		return p.err
-	}
-	if kind == kindFlush {
-		return n.db.Flush()
-	}
-	ops, err := decodeOps(body)
-	if err != nil {
-		return err
-	}
-	return n.db.Apply(ops)
+	flush()
+	return out
 }
 
 func (n *Node) Snapshot() (raft.FSMSnapshot, error) {

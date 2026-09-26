@@ -81,12 +81,23 @@ func (g *logGroup) rotateLocked(id uint32) error {
 		return g.db.fail(err)
 	}
 	g.db.fsyncs.Add(1)
-	return g.newActive(id)
+	prev := g.active
+	if err := g.newActive(id); err != nil {
+		return err
+	}
+	g.filesMu.Lock()
+	prev.seal()
+	g.filesMu.Unlock()
+	return nil
 }
 
 func (g *logGroup) newActive(id uint32) error {
 	df, err := openDataFile(g.dir, id)
 	if err != nil {
+		return err
+	}
+	if err := df.startMirror(); err != nil {
+		df.close()
 		return err
 	}
 	if err := syncDir(g.dir); err != nil {
@@ -190,6 +201,7 @@ func (g *logGroup) writeBatches(batches []*pendingBatch) error {
 		if err := writeFull(first.df.f, buf, first.off); err != nil {
 			return err
 		}
+		first.df.mirror(buf, first.off)
 		g.db.writes.Add(1)
 		first.df.written.Store(end)
 		i = j

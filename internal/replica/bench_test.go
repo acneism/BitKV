@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/raft"
 )
@@ -21,10 +22,22 @@ func benchModes(b *testing.B, fn func(b *testing.B, l *testNode)) {
 		b.Run("unsafe-no-fsync="+strconv.FormatBool(unsafe), func(b *testing.B) {
 			raftConfig = benchRaftConfig
 			b.Cleanup(func() { raftConfig = testRaftConfig })
-			l := leader(b, newCluster(b, 3, unsafe))
+			nodes := newCluster(b, 3, unsafe)
+			l := leader(b, nodes)
 			b.SetParallelism(16)
 			b.ResetTimer()
 			fn(b, l)
+			b.StopTimer()
+			start, target := time.Now(), l.node.raft.AppliedIndex()
+			eventually(b, "followers to catch up", func() bool {
+				for _, tn := range nodes {
+					if tn.node.raft.AppliedIndex() < target {
+						return false
+					}
+				}
+				return true
+			})
+			b.ReportMetric(float64(time.Since(start).Microseconds())/1000, "catchup-ms")
 		})
 	}
 }

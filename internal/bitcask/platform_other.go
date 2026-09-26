@@ -37,3 +37,11 @@ func writeFull(f *os.File, b []byte, off int64) error {
 	_, err := f.WriteAt(b, off)
 	return err
 }
+
+func mmapFile(*os.File, int64) ([]byte, error) {
+	return nil, nil
+}
+
+func munmap([]byte) error {
+	return nil
+}

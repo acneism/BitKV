@@ -53,3 +53,14 @@ func writeFull(f *os.File, b []byte, off int64) error {
 	_, err := f.WriteAt(b, off)
 	return err
 }
+
+func mmapFile(f *os.File, size int64) ([]byte, error) {
+	if size <= 0 || int64(int(size)) != size {
+		return nil, nil
+	}
+	return syscall.Mmap(int(f.Fd()), 0, int(size), syscall.PROT_READ, syscall.MAP_SHARED)
+}
+
+func munmap(b []byte) error {
+	return syscall.Munmap(b)
+}

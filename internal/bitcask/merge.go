@@ -154,6 +154,7 @@ func (g *logGroup) finishMerge(mergeDir string, boundary uint32, res *mergeResul
 			}
 			return g.failMerge(err)
 		}
+		df.seal()
 		opened = append(opened, df)
 	}
 	g.filesMu.Lock()

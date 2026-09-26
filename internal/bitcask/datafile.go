@@ -14,11 +14,12 @@ import (
 )
 
 const (
-	dataExt      = ".data"
-	hintExt      = ".hint"
-	lockName     = "LOCK"
-	mergeDirName = "merge"
-	mergedMarker = "MERGED"
+	dataExt       = ".data"
+	hintExt       = ".hint"
+	lockName      = "LOCK"
+	mergeDirName  = "merge"
+	mergedMarker  = "MERGED"
+	mirrorInitial = 64 << 10
 )
 
 type dataFile struct {
@@ -28,6 +29,8 @@ type dataFile struct {
 	written atomic.Int64
 	readers []*os.File
 	next    atomic.Uint32
+	mm      []byte
+	mem     atomic.Pointer[[]byte]
 }
 
 func fileName(id uint32, ext string) string {
@@ -56,6 +59,11 @@ func openDataFile(dir string, id uint32) (*dataFile, error) {
 }
 
 func (df *dataFile) close() error {
+	df.mem.Store(nil)
+	if df.mm != nil {
+		munmap(df.mm)
+		df.mm = nil
+	}
 	err := df.f.Close()
 	for _, r := range df.readers {
 		r.Close()
@@ -72,7 +80,10 @@ func (df *dataFile) reader() *os.File {
 
 func (df *dataFile) read(offset int64, key string, valueSize uint32) ([]byte, error) {
 	buf := make([]byte, recordSize(len(key), int(valueSize)))
-	if err := readFull(df.reader(), buf, offset); err != nil {
+	end := offset + int64(len(buf))
+	if src := df.cached(end); src != nil {
+		copy(buf, src[offset:end])
+	} else if err := readFull(df.reader(), buf, offset); err != nil {
 		return nil, err
 	}
 	h := decodeHeader(buf)
@@ -128,4 +139,39 @@ func removeFiles(dir string, id uint32) error {
 		}
 	}
 	return nil
+}
+
+func (df *dataFile) cached(end int64) []byte {
+	if end <= int64(len(df.mm)) {
+		return df.mm
+	}
+	if p := df.mem.Load(); p != nil && end <= int64(len(*p)) {
+		return *p
+	}
+	return nil
+}
+
+func (df *dataFile) seal() {
+	df.mem.Store(nil)
+	if m, err := mmapFile(df.f, df.size); err == nil {
+		df.mm = m
+	}
+}
+
+func (df *dataFile) startMirror() error {
+	m := make([]byte, df.size, max(df.size, mirrorInitial))
+	if err := readFull(df.f, m, 0); err != nil {
+		return err
+	}
+	df.mem.Store(&m)
+	return nil
+}
+
+func (df *dataFile) mirror(b []byte, off int64) {
+	p := df.mem.Load()
+	if p == nil || int64(len(*p)) != off {
+		return
+	}
+	m := append(*p, b...)
+	df.mem.Store(&m)
 }
