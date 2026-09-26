@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -233,4 +234,17 @@ func TestCatchUpAndFailover(t *testing.T) {
 	eventually(t, "flush to replicate", converged(nodes, "after", "flush", 1))
 	l.start(t)
 	eventually(t, "old leader to rejoin", converged(nodes, "after", "flush", 1))
+}
+
+func TestRefusesOldRaftLog(t *testing.T) {
+	dir := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(dir, "raft"), 0o755))
+	must(t, os.WriteFile(filepath.Join(dir, "raft", "raft.db"), nil, 0o644))
+	db, err := bitcask.Open(filepath.Join(dir, "data"), bitcask.DefaultOptions())
+	must(t, err)
+	defer db.Close()
+	peers := map[string]string{"n0": freeAddr(t)}
+	if _, err := open(db, Config{ID: "n0", Peers: peers, Dir: filepath.Join(dir, "raft")}, testRaftConfig()); !errors.Is(err, ErrOldRaftLog) {
+		t.Fatalf("open with raft.db: %v, want ErrOldRaftLog", err)
+	}
 }

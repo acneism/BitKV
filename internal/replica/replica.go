@@ -19,13 +19,15 @@ import (
 	"github.com/acneism/BitKV/internal/bitcask"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/raft"
-	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
+	wal "github.com/hashicorp/raft-wal"
+	"github.com/hashicorp/raft-wal/segment"
 )
 
 var (
 	ErrNotLeader      = errors.New("replica: not the leader")
 	ErrLeadershipLost = errors.New("replica: write interrupted by a leadership change, it may or may not be applied")
 	ErrNotEmpty       = errors.New("replica: database has data but no raft state, start the node from an empty directory")
+	ErrOldRaftLog     = errors.New("replica: raft.db from v0.5 found, the raft log is now raft-wal; start the node from an empty directory")
 	errStale          = errors.New("replica: entry was proposed in another term")
 	errEntry          = errors.New("replica: malformed log entry")
 )
@@ -35,8 +37,9 @@ const (
 	kindFlush  byte = 2
 	flagDelete byte = 1
 
-	maxField     = 1<<32 - 1
-	restoreBatch = 1024
+	maxField          = 1<<32 - 1
+	restoreBatch      = 1024
+	snapshotThreshold = 1 << 20
 )
 
 type Config struct {
@@ -63,7 +66,7 @@ type proposal struct {
 type Node struct {
 	db    *bitcask.DB
 	raft  *raft.Raft
-	store *raftboltdb.BoltStore
+	store *wal.WAL
 	base  uint64
 	seq   atomic.Uint64
 
@@ -94,7 +97,9 @@ func ParsePeers(s string) (map[string]string, error) {
 }
 
 func Open(db *bitcask.DB, cfg Config) (*Node, error) {
-	return open(db, cfg, raft.DefaultConfig())
+	rc := raft.DefaultConfig()
+	rc.SnapshotThreshold = snapshotThreshold
+	return open(db, cfg, rc)
 }
 
 func open(db *bitcask.DB, cfg Config, rc *raft.Config) (*Node, error) {
@@ -110,6 +115,9 @@ func open(db *bitcask.DB, cfg Config, rc *raft.Config) (*Node, error) {
 	rc.LocalID = raft.ServerID(cfg.ID)
 	rc.Logger = logger
 	rc.NoSnapshotRestoreOnStart = db.Len() > 0
+	if _, err := os.Stat(filepath.Join(cfg.Dir, "raft.db")); err == nil {
+		return nil, ErrOldRaftLog
+	}
 	if err := os.MkdirAll(cfg.Dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -117,7 +125,14 @@ func open(db *bitcask.DB, cfg Config, rc *raft.Config) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, err := raftboltdb.NewBoltStore(filepath.Join(cfg.Dir, "raft.db"))
+	walDir := filepath.Join(cfg.Dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := initWalMeta(walDir); err != nil {
+		return nil, err
+	}
+	store, err := wal.Open(walDir, wal.WithLogger(logger), wal.WithSegmentFiler(segment.NewFiler(walDir, newWalFS())))
 	if err != nil {
 		return nil, err
 	}

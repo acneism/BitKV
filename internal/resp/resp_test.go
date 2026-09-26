@@ -138,3 +138,29 @@ func FuzzReadCommand(f *testing.F) {
 		}
 	})
 }
+
+func TestReady(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{"", false},
+		{"*2\r\n$3\r\nGET\r\n$1\r\nk\r\n", true},
+		{"*2\r\n$3\r\nGET\r\n$1\r\nk\r", false},
+		{"*2\r\n$3\r\nGET\r\n", false},
+		{"*2\r\n$3\r\nGET\r\n$10\r\nabc", false},
+		{"*2", false},
+		{"PING\r\n", true},
+		{"PIN", false},
+		{"*1\r\n:5\r\n", true},
+		{"*x\r\n", true},
+		{"*0\r\n", true},
+	}
+	for _, tt := range tests {
+		r := NewReader(strings.NewReader(tt.in), 1<<20)
+		r.br.Peek(len(tt.in))
+		if got := r.Ready(); got != tt.want {
+			t.Fatalf("Ready(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}

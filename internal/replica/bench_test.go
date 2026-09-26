@@ -10,7 +10,7 @@ import (
 
 func benchRaftConfig() *raft.Config {
 	c := testRaftConfig()
-	c.SnapshotThreshold = raft.DefaultConfig().SnapshotThreshold
+	c.SnapshotThreshold = snapshotThreshold
 	c.SnapshotInterval = raft.DefaultConfig().SnapshotInterval
 	c.TrailingLogs = raft.DefaultConfig().TrailingLogs
 	return c

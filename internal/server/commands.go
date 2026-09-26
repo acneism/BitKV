@@ -69,6 +69,10 @@ type command struct {
 	noAuth  bool
 }
 
+func (cmd command) validArity(n int) bool {
+	return (cmd.arity <= 0 || n == cmd.arity) && (cmd.arity >= 0 || n >= -cmd.arity)
+}
+
 var commands map[string]command
 
 func init() {

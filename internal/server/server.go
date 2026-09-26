@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	Version      = "0.5.0"
+	Version      = "0.6.0"
 	redisVersion = "7.2.0"
 )
 
@@ -166,17 +166,28 @@ func (s *Server) serveClient(c *client) {
 		s.mu.Unlock()
 		c.conn.Close()
 	}()
+	var batch []queued
 	for !c.quit {
 		args, err := c.r.ReadCommand()
 		if err != nil {
+			s.runBatch(c, batch)
 			var pe *resp.ProtocolError
 			if errors.As(err, &pe) {
 				c.w.Error("ERR " + pe.Error())
-				c.w.Flush()
 			}
+			c.w.Flush()
 			return
 		}
-		if len(args) > 0 {
+		cmd, ok := s.batchable(c, args)
+		if ok {
+			batch = append(batch, queued{cmd: cmd, args: args})
+			if c.r.Ready() {
+				continue
+			}
+		}
+		s.runBatch(c, batch)
+		batch = batch[:0]
+		if !ok && len(args) > 0 {
 			s.execute(c, args)
 		}
 		if c.quit || c.r.Buffered() == 0 {
@@ -187,21 +198,62 @@ func (s *Server) serveClient(c *client) {
 	}
 }
 
-func (s *Server) execute(c *client, args [][]byte) {
-	defer func() {
-		if r := recover(); r != nil {
-			s.log.Error("command panicked", "cmd", truncate(args[0], 64), "panic", r)
-			c.w.Error("ERR internal error")
-			c.quit = true
+func (s *Server) batchable(c *client, args [][]byte) (command, bool) {
+	if len(args) == 0 || c.multi || !c.authed {
+		return command{}, false
+	}
+	cmd, ok := commands[strings.ToLower(string(args[0]))]
+	if !ok || cmd.kind != kindWrite || cmd.global || !cmd.validArity(len(args)) {
+		return command{}, false
+	}
+	return cmd, true
+}
+
+func (s *Server) runBatch(c *client, batch []queued) {
+	switch len(batch) {
+	case 0:
+		return
+	case 1:
+		s.execute(c, batch[0].args)
+		return
+	}
+	defer s.recoverCommand(c, batch[0].args[0])
+	var keys []string
+	for _, q := range batch {
+		keys = q.cmd.keys.extract(q.args, keys)
+	}
+	var replies arrayReply
+	err := s.update(bitcask.Keys(keys...), func(tx *bitcask.Tx) (err error) {
+		replies, err = runQueue(tx, batch)
+		return err
+	})
+	s.processed.Add(int64(len(batch)))
+	for i := range batch {
+		if err != nil {
+			storageError(err).writeTo(c.w)
+		} else {
+			replies[i].writeTo(c.w)
 		}
-	}()
+	}
+}
+
+func (s *Server) recoverCommand(c *client, name []byte) {
+	if r := recover(); r != nil {
+		s.log.Error("command panicked", "cmd", truncate(name, 64), "panic", r)
+		c.w.Error("ERR internal error")
+		c.quit = true
+	}
+}
+
+func (s *Server) execute(c *client, args [][]byte) {
+	defer s.recoverCommand(c, args[0])
 	name := strings.ToLower(string(args[0]))
 	cmd, ok := commands[name]
 	switch {
 	case !ok:
 		c.reject(errorReply(unknownCommand(args)))
 		return
-	case (cmd.arity > 0 && len(args) != cmd.arity) || (cmd.arity < 0 && len(args) < -cmd.arity):
+	case !cmd.validArity(len(args)):
 		c.reject(errorReply("ERR wrong number of arguments for '" + name + "' command"))
 		return
 	case !c.authed && !cmd.noAuth:

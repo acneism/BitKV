@@ -324,13 +324,16 @@ func TestPipeliningAndInline(t *testing.T) {
 	srv, db, addr := startServer(t, t.TempDir())
 	defer stopServer(t, srv, db)
 	c := dial(t, addr)
-	raw := encode("SET", "p", "1") + encode("INCR", "p") + "PING\r\n" + encode("GET", "p")
+	raw := encode("SET", "p", "1") + encode("INCR", "p") + encode("SET", "s", "x") + encode("INCR", "s") +
+		encode("GET", "p") + encode("INCR", "p") + encode("SET", "p") + "PING\r\n" + encode("GET", "p")
 	if _, err := io.WriteString(c.conn, raw); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []any{status("OK"), int64(2), status("PONG"), "2"} {
-		if got := c.read(); !reflect.DeepEqual(got, want) {
-			t.Fatalf("got %#v, want %#v", got, want)
+	want := []any{status("OK"), int64(2), status("OK"), errReply("ERR value is not an integer or out of range"),
+		"2", int64(3), errReply("ERR wrong number of arguments for 'set' command"), status("PONG"), "3"}
+	for _, w := range want {
+		if got := c.read(); !reflect.DeepEqual(got, w) {
+			t.Fatalf("got %#v, want %#v", got, w)
 		}
 	}
 }
@@ -339,8 +342,13 @@ func TestProtocolErrorClosesConnection(t *testing.T) {
 	srv, db, addr := startServer(t, t.TempDir())
 	defer stopServer(t, srv, db)
 	c := dial(t, addr)
-	if _, err := io.WriteString(c.conn, "*1\r\n:5\r\n"); err != nil {
+	if _, err := io.WriteString(c.conn, encode("SET", "a", "1")+encode("SET", "b", "2")+"*1\r\n:5\r\n"); err != nil {
 		t.Fatal(err)
+	}
+	for range 2 {
+		if got := c.read(); got != status("OK") {
+			t.Fatalf("got %#v before protocol error, want OK", got)
+		}
 	}
 	if got, _ := c.read().(errReply); !strings.HasPrefix(string(got), "ERR Protocol error") {
 		t.Fatalf("got %q, want protocol error", got)

@@ -37,6 +37,38 @@ func (r *Reader) Buffered() int {
 	return r.br.Buffered()
 }
 
+func (r *Reader) Ready() bool {
+	b, _ := r.br.Peek(r.br.Buffered())
+	line, rest, ok := bytes.Cut(b, []byte{'\n'})
+	if !ok {
+		return false
+	}
+	if len(line) == 0 || line[0] != '*' {
+		return true
+	}
+	n, ok := parseInt(bytes.TrimSuffix(line[1:], []byte{'\r'}))
+	if !ok {
+		return true
+	}
+	for range n {
+		if line, rest, ok = bytes.Cut(rest, []byte{'\n'}); !ok {
+			return false
+		}
+		if len(line) == 0 || line[0] != '$' {
+			return true
+		}
+		size, ok := parseInt(bytes.TrimSuffix(line[1:], []byte{'\r'}))
+		if !ok || size < 0 {
+			return true
+		}
+		if len(rest) < size+2 {
+			return false
+		}
+		rest = rest[size+2:]
+	}
+	return true
+}
+
 func (r *Reader) ReadCommand() ([][]byte, error) {
 	line, err := r.readLine()
 	if err != nil {

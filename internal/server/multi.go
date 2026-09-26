@@ -11,6 +11,18 @@ var okCommand = command{arity: 1, kind: kindPure, tx: func(*bitcask.Tx, [][]byte
 	return okReply, nil
 }}
 
+func runQueue(tx *bitcask.Tx, queue []queued) (arrayReply, error) {
+	results := make(arrayReply, 0, len(queue))
+	for _, q := range queue {
+		r, err := q.cmd.tx(tx, q.args)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, r)
+	}
+	return results, nil
+}
+
 func (c *client) resetMulti() {
 	c.multi, c.dirty, c.queue, c.watched = false, false, nil, nil
 }
@@ -94,15 +106,9 @@ func cmdExec(s *Server, c *client, args [][]byte) reply {
 				return nil
 			}
 		}
-		results = make(arrayReply, 0, len(queue))
-		for _, q := range queue {
-			r, err := q.cmd.tx(tx, q.args)
-			if err != nil {
-				return err
-			}
-			results = append(results, r)
-		}
-		return nil
+		var err error
+		results, err = runQueue(tx, queue)
+		return err
 	}
 	var err error
 	if writes {
