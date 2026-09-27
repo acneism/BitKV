@@ -1,0 +1,92 @@
+# Replication
+
+A CasketDB cluster is 3 or 5 nodes that hold the same data and agree on every write through Raft, using the library [github.com/acneism/raft](https://github.com/acneism/raft). Each node stores a full copy; there is no sharding between nodes.
+
+## Guarantees
+
+- **A write is acknowledged only after a majority of nodes has it in the Raft log** and the leader has applied it. If the leader fails, the new leader has every acknowledged write. Redis replication, by contrast, is asynchronous and can lose acknowledged writes on failover.
+- **Writes go to the leader only.** Followers answer `-READONLY You can't write against a read only replica.`
+- **Reads are served by every node and may be stale.** A follower, or a leader that has just lost its leadership, can return data that is behind the latest write. Reads never see uncommitted data.
+- **A cluster of 3 survives one failed node, a cluster of 5 survives two.**
+
+## Starting a cluster
+
+Start every node with the same `-raft-peers` and empty directories. The initial configuration comes from `-raft-peers`, so no bootstrap step is needed.
+
+```bash
+casketdb -addr 10.0.0.1:6379 -dir data -raft-id n1 -raft-peers n1=10.0.0.1:7000,n2=10.0.0.2:7000,n3=10.0.0.3:7000
+```
+
+The address in `-raft-peers` is where that node's Raft transport listens; `-addr` is where clients connect.
+
+A node whose data directory holds keys but has no Raft state refuses to start: joining it would make the nodes diverge. To turn an existing single-node database into a cluster, start the cluster empty and load the data through a client.
+
+## Finding the leader
+
+`INFO replication` on any node shows `role`, `raft_state`, `raft_term`, `raft_leader_id` and `raft_leader_addr`. Clients find the leader themselves: from `INFO replication`, or by trying another node after a `READONLY` reply.
+
+## What is replicated
+
+The leader replicates the effects of a command, not the command. It runs the command in an ordinary transaction and sends the resulting operations — key, value, absolute expiry time, deletion — to Raft. As a result:
+
+- INCR, APPEND and `SET … EX` give the same result on every node, because the time and the read happen once, on the leader;
+- applying an entry twice is harmless, since the operations are absolute;
+- WATCH and EXEC are checked on the leader against its local versions.
+
+## Writes on the leader
+
+The transaction proposes its operations to Raft while it still holds its key locks, so the order of entries in the log matches the order of dependent writes. It then marks the new values as proposed, releases the locks and waits for the commit without them. The next write to the same key builds on the proposed value and does not wait for the previous Raft round, so a hot key is not limited to one write per round trip.
+
+Reads see only committed values.
+
+## Leader changes
+
+- A new leader accepts writes only after it has applied an entry of its own term, which guarantees that every entry from earlier terms is applied.
+- A proposal carries the leader's term; the library rejects it if the term has changed. Only operations computed by the current leader reach the log.
+- On a leadership change, proposed values are dropped. Writes that were waiting get `ERR replica: write interrupted by a leadership change, it may or may not be applied`: the write may or may not have been committed, as in any consensus system. Retry it if it is idempotent, or read the key to check.
+
+`FLUSHDB` also goes through Raft. It waits for all started writes to finish first.
+
+## Durable index and log compaction
+
+Every node applies committed entries to its data files without waiting for an fsync. To know how much of the Raft log it can drop, CasketDB tracks the durable index: the highest Raft index whose effects, and the effects of all earlier entries, are on disk in every log.
+
+- After each batch of entries, the node records the index it has applied. On every fsync of the data files (once per second with `everysec`, on `SAVE` and on shutdown), it appends an index mark to each log. No fsync is added to the write path.
+- The durable index is the minimum, over all logs, of the last mark covered by an fsync. After a crash it is the minimum of the last surviving mark in each log, so losing the unsynced tail of one log never overstates it.
+- The Raft log is compacted without snapshots, up to 65,536 entries behind the durable index, once at least 65,536 entries can be dropped.
+- On restart, a node replays only the entries after its durable index. Replay is idempotent.
+
+With `-appendfsync no`, the durable index follows writes to the files instead of fsyncs. That survives `kill -9`. After a power loss the Raft log may already be compacted past the data that survived; if no local snapshot covers the gap, the node refuses to start rather than diverge from the cluster.
+
+## Snapshots
+
+A snapshot is taken only when a follower falls behind the start of the leader's log. It hard-links the data and hint files and adds a list of their lengths, so it costs time proportional to the number of files, not the data size. The leader keeps the two latest snapshots in `<raft-dir>/snap/`. While a snapshot is kept, files that a merge deleted still take disk space.
+
+A follower restores a snapshot through a temporary database in `<raft-dir>/restore`, then clears its own data and copies the keys in batches. Peak memory is about twice the key index. An interrupted restore is marked in the Raft log and repeated on the next start.
+
+## Raft directory
+
+```
+raft/
+  wal/        log segments, term and vote (hardstate), compaction and snapshot bounds (meta)
+  snap/       snapshots
+  restore/    temporary database while a snapshot is being restored
+```
+
+A Raft directory written by hashicorp/raft (CasketDB v0.9 and older, then named BitKV) is rejected at start. See the [changelog](../CHANGELOG.md#upgrading-from-v09).
+
+## Running without fsync
+
+`-raft-unsafe-no-fsync` skips the fsync of Raft log segments, like `--unsafe-no-fsync` in etcd. Term, vote, log bounds and snapshots are still fsynced. A process crash stays safe, because the data is in the OS cache. A power loss is not: the node forgets acknowledged entries, and if the leader then fails, a new leader can be elected without them. The server logs a warning when the flag is set.
+
+## Expiry
+
+Each node expires keys by its own clock. On a follower, a key can stay visible for as long as the clocks differ. Keep node clocks in sync with NTP.
+
+## Limitations
+
+- Membership is fixed at start by `-raft-peers`; nodes cannot be added or removed at runtime.
+- The Raft transport has no authentication or encryption. The library supports TLS, but CasketDB has no flags for it yet. Run the cluster on a trusted network.
+- There are no linearizable reads.
+
+More in [limitations](limitations.md).
