@@ -2,12 +2,6 @@
 
 Versions are listed newest first. CasketDB was called BitKV up to and including v0.9.
 
-## Unreleased
-
-### Security
-
-- Directories are created with mode `0700` and files with `0600`. They used to be `0755` and `0644`, so on Linux every local user could read the data. The server logs a warning at start if an existing `-dir` or Raft directory is open to other users; run `chmod 700` on it.
-
 ## v0.10 — 2026-09-28
 
 ### Changed
@@ -21,7 +15,11 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 
 - Durable index: every log stores Raft index marks, so a node knows exactly which Raft entries are on disk in all logs. The mark rides on the existing fsync; no fsync is added to the write path.
 - The Raft log is compacted without snapshots, 65,536 entries behind the durable index. A restart replays only the entries after the durable index instead of up to about a million.
-- Project documentation: README, [docs/](docs/README.md), CONTRIBUTING, SECURITY and this changelog.
+- Project documentation: README, [docs/](docs/README.md), CONTRIBUTING, SECURITY and this changelog, and a logo.
+
+### Security
+
+- Directories are created with mode `0700` and files with `0600`. They used to be `0755` and `0644`, so on Linux every local user could read the data. The server logs a warning at start if an existing `-dir` or Raft directory is open to other users; run `chmod 700` on it.
 
 ### Upgrading from v0.9
 
