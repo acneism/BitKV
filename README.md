@@ -1,4 +1,9 @@
-# CasketDB
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.svg">
+    <img alt="CasketDB" src="docs/images/logo.svg" width="420">
+  </picture>
+</h1>
 
 CasketDB is a Redis-compatible key-value store written in Go. It keeps values on disk in a Bitcask log, runs commands on all cores, and can replicate through Raft so that a failed node never takes acknowledged writes with it.
 
