@@ -36,6 +36,16 @@ type logGroup struct {
 
 	mergeMu    sync.Mutex
 	totalBytes atomic.Int64
+
+	mark    uint64
+	markMu  sync.Mutex
+	marks   []markPoint
+	durable uint64
+}
+
+type markPoint struct {
+	seq   uint64
+	index uint64
 }
 
 func newLogGroup(db *DB, id int, dir string) *logGroup {
@@ -71,6 +81,57 @@ func (g *logGroup) reserveLocked(b *pendingBatch) error {
 	g.queue = append(g.queue, b)
 	g.qMu.Unlock()
 	return nil
+}
+
+func (g *logGroup) reserveMarkLocked(index uint64) (uint64, error) {
+	b := &pendingBatch{buf: appendMark(nil, index)}
+	if err := g.reserveLocked(b); err != nil {
+		return 0, err
+	}
+	g.mark = index
+	g.markMu.Lock()
+	g.marks = append(g.marks, markPoint{seq: b.seq, index: index})
+	g.markMu.Unlock()
+	return b.seq, nil
+}
+
+func (g *logGroup) carryMarkLocked() error {
+	if g.mark == 0 {
+		return nil
+	}
+	seq, err := g.reserveMarkLocked(g.mark)
+	if err != nil {
+		return err
+	}
+	if err := g.waitWritten(seq); err != nil {
+		return err
+	}
+	if err := g.active.f.Sync(); err != nil {
+		return g.db.fail(err)
+	}
+	g.db.fsyncs.Add(1)
+	return nil
+}
+
+func (g *logGroup) durableMark() uint64 {
+	var done uint64
+	if g.db.opts.Sync == SyncNo {
+		g.wmu.Lock()
+		done = g.written
+		g.wmu.Unlock()
+	} else {
+		g.syncMu.Lock()
+		done = g.synced
+		g.syncMu.Unlock()
+	}
+	g.markMu.Lock()
+	defer g.markMu.Unlock()
+	i := 0
+	for ; i < len(g.marks) && g.marks[i].seq <= done; i++ {
+		g.durable = g.marks[i].index
+	}
+	g.marks = g.marks[i:]
+	return g.durable
 }
 
 func (g *logGroup) rotateLocked(id uint32) error {

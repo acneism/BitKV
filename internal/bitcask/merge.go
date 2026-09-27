@@ -39,6 +39,12 @@ func (g *logGroup) merge() error {
 	if err != nil {
 		return err
 	}
+	g.logMu.Lock()
+	err = g.carryMarkLocked()
+	g.logMu.Unlock()
+	if err != nil {
+		return err
+	}
 	mergeDir := filepath.Join(g.dir, mergeDirName)
 	res, err := g.writeMerge(mergeDir, inputs, boundary, reserve)
 	if err != nil {
@@ -101,7 +107,7 @@ func (g *logGroup) writeMerge(dir string, inputs []*dataFile, boundary, reserve 
 				default:
 				}
 			}
-			if rec.flags&(flagTombstone|flagFlush|flagTx|flagTxCommit) != 0 {
+			if rec.flags&(flagTombstone|flagFlush|flagTx|flagTxCommit|flagMark) != 0 {
 				continue
 			}
 			s := &g.db.kd.shards[shardIndex(rec.key)]

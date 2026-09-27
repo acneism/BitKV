@@ -21,7 +21,7 @@ var ownTuning = testOwnTuning
 
 func testOwnTuning(c *node.Config) {
 	c.TickInterval = time.Millisecond
-	c.SnapshotEntries = 16
+	c.CompactEntries = 16
 	c.TrailingEntries = 4
 	c.SegmentSize = 8 << 10
 }
@@ -84,10 +84,9 @@ func TestOwnRefusesOtherEngineDir(t *testing.T) {
 	}
 }
 
-func latestSnapshot(t *testing.T, raftDir string) (raft.SnapshotMeta, string) {
-	t.Helper()
-	des, err := os.ReadDir(filepath.Join(raftDir, "snap"))
-	must(t, err)
+func latestSnapshot(tn *testNode) (raft.SnapshotMeta, string, bool) {
+	raftDir := filepath.Join(tn.dir, "raft")
+	des, _ := os.ReadDir(filepath.Join(raftDir, "snap"))
 	var best raft.SnapshotMeta
 	var path string
 	for _, de := range des {
@@ -99,10 +98,42 @@ func latestSnapshot(t *testing.T, raftDir string) (raft.SnapshotMeta, string) {
 			best, path = raft.SnapshotMeta{Index: index, Term: term}, filepath.Join(raftDir, "snap", de.Name())
 		}
 	}
-	if path == "" {
-		t.Fatal("no snapshot")
+	return best, path, path != ""
+}
+
+func voters(tn *testNode) raft.ConfState {
+	var ids []raft.NodeID
+	for id := range tn.peers {
+		ids = append(ids, raft.NodeID(id))
 	}
-	return best, path
+	slices.Sort(ids)
+	return raft.ConfState{Voters: ids}
+}
+
+func firstLogIndex(t *testing.T, tn *testNode) uint64 {
+	t.Helper()
+	log, err := raftwal.Open(filepath.Join(tn.dir, "raft", "wal"), voters(tn), raftwal.Options{})
+	must(t, err)
+	defer log.Close()
+	first, err := log.FirstIndex()
+	must(t, err)
+	return first
+}
+
+func ownFSM(tn *testNode) *bitcaskFSM {
+	return tn.node.(*ownNode).fsm
+}
+
+func compact(t *testing.T, nodes []*testNode, l *testNode, prefix string) {
+	t.Helper()
+	for _, tn := range nodes {
+		if tn.node != nil {
+			must(t, tn.db.Sync())
+		}
+	}
+	for i := range 20 {
+		must(t, put(l, prefix+strconv.Itoa(i), "v"))
+	}
 }
 
 func copyDir(t *testing.T, from, to string) {
@@ -140,13 +171,11 @@ func TestOwnInterruptedRestoreResumes(t *testing.T) {
 	for i := range 40 {
 		must(t, put(l, "late"+strconv.Itoa(i), "v"))
 	}
-	snap, src := latestSnapshot(t, filepath.Join(l.dir, "raft"))
-	var ids []raft.NodeID
-	for id := range f.peers {
-		ids = append(ids, raft.NodeID(id))
-	}
-	slices.Sort(ids)
-	snap.Conf = raft.ConfState{Voters: ids}
+	src := t.TempDir()
+	snap, err := ownFSM(l).Snapshot(src)
+	must(t, err)
+	snap.Term = l.node.Status().Term
+	snap.Conf = voters(f)
 	raftDir := filepath.Join(f.dir, "raft")
 	copyDir(t, src, transport.IncomingDir(filepath.Join(raftDir, "snap"), snap))
 	log, err := raftwal.Open(filepath.Join(raftDir, "wal"), snap.Conf, raftwal.Options{})
@@ -174,4 +203,74 @@ func TestOwnInterruptedRestoreResumes(t *testing.T) {
 	if log.Restoring() != nil {
 		t.Fatal("restore marker left behind")
 	}
+}
+
+func TestOwnCompactsWithoutSnapshots(t *testing.T) {
+	nodes := newCluster(t, EngineOwn, 3, false)
+	l := leader(t, nodes)
+	for i := range 100 {
+		must(t, put(l, "k"+strconv.Itoa(i), "v"))
+	}
+	compact(t, nodes, l, "fill")
+	must(t, put(l, "last", "v"))
+	eventually(t, "replication", converged(nodes, "last", "v", 121))
+	for _, tn := range nodes {
+		tn.stop(t)
+		if first := firstLogIndex(t, tn); first < 80 {
+			t.Fatalf("%s: the log still starts at %d", tn.id, first)
+		}
+		if _, _, ok := latestSnapshot(tn); ok {
+			t.Fatalf("%s took a snapshot while every follower kept up", tn.id)
+		}
+	}
+}
+
+func TestOwnRestartReplaysOnlyTail(t *testing.T) {
+	nodes := newCluster(t, EngineOwn, 3, false)
+	l := leader(t, nodes)
+	for i := range 50 {
+		must(t, put(l, "k"+strconv.Itoa(i), "v"))
+	}
+	eventually(t, "replication", converged(nodes, "k49", "v", 50))
+	f := nodes[0]
+	if f == l {
+		f = nodes[1]
+	}
+	applied := ownFSM(f).applied.Load()
+	f.stop(t)
+	db, err := bitcask.Open(filepath.Join(f.dir, "data"), bitcask.DefaultOptions())
+	must(t, err)
+	durable := db.DurableIndex()
+	must(t, db.Close())
+	if durable != applied {
+		t.Fatalf("durable index after a clean stop is %d, applied %d", durable, applied)
+	}
+	for i := range 10 {
+		must(t, put(l, "late"+strconv.Itoa(i), "v"))
+	}
+	f.start(t)
+	eventually(t, "restarted follower to catch up", converged(nodes, "late9", "v", 60))
+	if first := ownFSM(f).first.Load(); first != durable+1 {
+		t.Fatalf("the restarted follower applied from %d, want %d", first, durable+1)
+	}
+}
+
+func TestOwnLaggingFollowerCatchesUpBySnapshot(t *testing.T) {
+	nodes := newCluster(t, EngineOwn, 3, false)
+	l := leader(t, nodes)
+	f := nodes[0]
+	if f == l {
+		f = nodes[1]
+	}
+	f.stop(t)
+	for i := range 60 {
+		must(t, put(l, "k"+strconv.Itoa(i), "v"))
+	}
+	compact(t, nodes, l, "fill")
+	f.start(t)
+	eventually(t, "lagging follower to catch up", converged(nodes, "fill19", "v", 80))
+	eventually(t, "the lagging follower to install a snapshot", func() bool {
+		_, _, ok := latestSnapshot(f)
+		return ok
+	})
 }

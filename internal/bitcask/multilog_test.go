@@ -241,3 +241,135 @@ func TestLogsWriteInParallel(t *testing.T) {
 		t.Fatalf("len after reopen = %d, want 400", n)
 	}
 }
+
+func markedWrites(t *testing.T, db *DB, from, to int) {
+	t.Helper()
+	for i := from; i <= to; i++ {
+		ops := make([]Op, 8)
+		for j := range ops {
+			ops[j] = Op{Key: fmt.Sprintf("k%d-%d", i, j), Value: []byte(fmt.Sprintf("v%d", i))}
+		}
+		if err := db.Apply(ops, 0); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.MarkIndex(uint64(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func diskImage(t *testing.T, db *DB, keep map[int]int64) string {
+	t.Helper()
+	dir := t.TempDir()
+	copyFiles(t, db.dir, dir, func(string) bool { return true })
+	for i, g := range db.groups {
+		dst := filepath.Join(dir, filepath.Base(g.dir))
+		if err := os.MkdirAll(dst, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		copyFiles(t, g.dir, dst, func(string) bool { return true })
+		if size, ok := keep[i]; ok {
+			if err := os.Truncate(filepath.Join(dst, fileName(g.active.id, dataExt)), size); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return dir
+}
+
+func expectMarked(t *testing.T, db *DB, upTo int) {
+	t.Helper()
+	for i := 1; i <= upTo; i++ {
+		for j := range 8 {
+			expect(t, db, fmt.Sprintf("k%d-%d", i, j), fmt.Sprintf("v%d", i))
+		}
+	}
+}
+
+func TestDurableIndexNeverOverestimates(t *testing.T) {
+	o := multiOptions(4)
+	o.Sync = SyncEverySec
+	o.MaxFileSize = 1 << 20
+	db := mustOpen(t, t.TempDir(), o)
+	defer mustClose(t, db)
+	markedWrites(t, db, 1, 50)
+	if err := db.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if got := db.DurableIndex(); got != 50 {
+		t.Fatalf("durable index after sync = %d, want 50", got)
+	}
+	synced := map[int]int64{}
+	for i, g := range db.groups {
+		synced[i] = g.active.written.Load()
+	}
+	markedWrites(t, db, 51, 100)
+	if got := db.DurableIndex(); got < 50 || got > 100 {
+		t.Fatalf("durable index before the next sync = %d", got)
+	}
+	db.writeQueued()
+	for _, c := range []struct {
+		name string
+		keep map[int]int64
+		want uint64
+	}{
+		{"kill -9", nil, 100},
+		{"power loss", synced, 50},
+		{"one log lost its unsynced tail", map[int]int64{0: synced[0]}, 50},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			img := mustOpen(t, diskImage(t, db, c.keep), o)
+			defer mustClose(t, img)
+			if got := img.DurableIndex(); got != c.want {
+				t.Fatalf("recovered durable index %d, want %d", got, c.want)
+			}
+			expectMarked(t, img, int(c.want))
+		})
+	}
+}
+
+func TestDurableIndexSurvivesMergeAndFlush(t *testing.T) {
+	o := multiOptions(2)
+	o.Sync = SyncEverySec
+	db := mustOpen(t, t.TempDir(), o)
+	defer mustClose(t, db)
+	markedWrites(t, db, 1, 60)
+	if err := db.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Merge(); err != nil {
+		t.Fatal(err)
+	}
+	merged := mustOpen(t, diskImage(t, db, nil), o)
+	if got := merged.DurableIndex(); got != 60 {
+		t.Fatalf("durable index after merge = %d, want 60", got)
+	}
+	expectMarked(t, merged, 60)
+	mustClose(t, merged)
+	if err := db.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	flushed := mustOpen(t, diskImage(t, db, nil), o)
+	defer mustClose(t, flushed)
+	if got := flushed.DurableIndex(); got != 60 || flushed.Len() != 0 {
+		t.Fatalf("after flush: durable index %d, %d keys", got, flushed.Len())
+	}
+}
+
+func TestDurableIndexWithoutFsyncFollowsWrites(t *testing.T) {
+	o := multiOptions(4)
+	o.MaxFileSize = 1 << 20
+	db := mustOpen(t, t.TempDir(), o)
+	defer mustClose(t, db)
+	markedWrites(t, db, 1, 30)
+	db.writeQueued()
+	if got := db.DurableIndex(); got != 30 {
+		t.Fatalf("durable index after the writes reached the files = %d, want 30", got)
+	}
+	img := mustOpen(t, diskImage(t, db, nil), o)
+	defer mustClose(t, img)
+	if got := img.DurableIndex(); got != 30 {
+		t.Fatalf("recovered durable index %d, want 30", got)
+	}
+	expectMarked(t, img, 30)
+}

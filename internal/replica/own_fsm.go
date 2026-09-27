@@ -4,10 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
-	"errors"
-	"hash/crc32"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -17,16 +14,13 @@ import (
 	"github.com/acneism/raft/node"
 )
 
-const (
-	durableName  = "fsm-durable"
-	snapshotInfo = "bitkv-snapshot"
-)
+const snapshotInfo = "bitkv-snapshot"
 
 type bitcaskFSM struct {
 	db      *bitcask.DB
 	dir     string
 	applied atomic.Uint64
-	durable atomic.Uint64
+	first   atomic.Uint64
 }
 
 func newBitcaskFSM(db *bitcask.DB, dir string) (*bitcaskFSM, error) {
@@ -34,37 +28,8 @@ func newBitcaskFSM(db *bitcask.DB, dir string) (*bitcaskFSM, error) {
 		return nil, err
 	}
 	f := &bitcaskFSM{db: db, dir: dir}
-	b, err := os.ReadFile(filepath.Join(dir, durableName))
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-	case err != nil:
-		return nil, err
-	case len(b) == 12 && crc32.ChecksumIEEE(b[:8]) == binary.LittleEndian.Uint32(b[8:]):
-		if db.Len() > 0 {
-			f.durable.Store(binary.LittleEndian.Uint64(b))
-		}
-	default:
-		return nil, errors.New("replica: corrupt " + durableName)
-	}
-	f.applied.Store(f.durable.Load())
+	f.applied.Store(db.DurableIndex())
 	return f, nil
-}
-
-func (f *bitcaskFSM) setDurable(index uint64) error {
-	b := binary.LittleEndian.AppendUint64(nil, index)
-	b = binary.LittleEndian.AppendUint32(b, crc32.ChecksumIEEE(b))
-	tmp := filepath.Join(f.dir, durableName+".tmp")
-	if err := writeSync(tmp, b); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, filepath.Join(f.dir, durableName)); err != nil {
-		return err
-	}
-	if err := syncDir(f.dir); err != nil {
-		return err
-	}
-	f.durable.Store(index)
-	return nil
 }
 
 func writeSync(path string, b []byte) error {
@@ -135,12 +100,16 @@ func (f *bitcaskFSM) Apply(ents []raft.Entry) error {
 		return err
 	}
 	if n := len(ents); n > 0 {
+		f.first.CompareAndSwap(0, ents[0].Index)
+		if err := f.db.MarkIndex(ents[n-1].Index); err != nil {
+			return err
+		}
 		f.applied.Store(ents[n-1].Index)
 	}
 	return nil
 }
 
-func (f *bitcaskFSM) DurableIndex() uint64 { return f.durable.Load() }
+func (f *bitcaskFSM) DurableIndex() uint64 { return f.db.DurableIndex() }
 
 func (f *bitcaskFSM) Snapshot(dir string) (raft.SnapshotMeta, error) {
 	index := f.applied.Load()
@@ -153,9 +122,6 @@ func (f *bitcaskFSM) Snapshot(dir string) (raft.SnapshotMeta, error) {
 		info = appendFileEntry(info, sf)
 	}
 	if err := writeSync(filepath.Join(dir, snapshotInfo), info); err != nil {
-		return raft.SnapshotMeta{}, err
-	}
-	if err := f.setDurable(index); err != nil {
 		return raft.SnapshotMeta{}, err
 	}
 	return raft.SnapshotMeta{Index: index}, nil
@@ -207,13 +173,16 @@ func (f *bitcaskFSM) Restore(src node.SnapshotSource) error {
 		err = f.db.Apply(batch, 0)
 	}
 	if err == nil {
+		err = f.db.MarkIndex(src.Meta.Index)
+	}
+	if err == nil {
 		err = f.db.Sync()
 	}
 	if err != nil {
 		return err
 	}
 	f.applied.Store(src.Meta.Index)
-	return f.setDurable(src.Meta.Index)
+	return nil
 }
 
 func copyPrefix(from, to string, size int64) error {

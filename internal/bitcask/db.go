@@ -235,6 +235,38 @@ func (db *DB) Keys(match func(string) bool) []string {
 	return keys
 }
 
+func (db *DB) MarkIndex(index uint64) error {
+	for _, g := range db.groups {
+		g.logMu.Lock()
+		err := db.stateErr()
+		if err == nil {
+			_, err = g.reserveMarkLocked(index)
+		}
+		g.logMu.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (db *DB) DurableIndex() uint64 {
+	d := uint64(math.MaxUint64)
+	for _, g := range db.groups {
+		d = min(d, g.durableMark())
+	}
+	return d
+}
+
+func (db *DB) writeQueued() {
+	for _, g := range db.groups {
+		g.logMu.Lock()
+		seq := g.seq
+		g.logMu.Unlock()
+		_ = g.waitWritten(seq)
+	}
+}
+
 func (db *DB) Flush() error {
 	db.lockGroups()
 	defer db.unlockGroups()
@@ -247,6 +279,9 @@ func (db *DB) Flush() error {
 		old[i] = g.fileIDs()
 		bounds[i] = g.active.id
 		if err := g.rotateLocked(g.active.id + 1); err != nil {
+			return err
+		}
+		if err := g.carryMarkLocked(); err != nil {
 			return err
 		}
 	}
@@ -369,8 +404,11 @@ func (db *DB) Merge() error {
 }
 
 func (db *DB) startBackground() {
-	if db.opts.Sync == SyncEverySec {
+	switch db.opts.Sync {
+	case SyncEverySec, SyncAlways:
 		db.every(time.Second, func() { _ = db.Sync() })
+	case SyncNo:
+		db.every(time.Second, db.writeQueued)
 	}
 	if db.opts.ExpireInterval > 0 {
 		db.every(db.opts.ExpireInterval, db.expireCycle)

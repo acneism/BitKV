@@ -36,6 +36,7 @@ type loadState struct {
 	parts   map[uint64]*txPart
 	commits map[uint64]bool
 	touched map[string]recPos
+	mark    uint64
 }
 
 func (db *DB) load() error {
@@ -73,6 +74,7 @@ func (db *DB) load() error {
 		if err := st.g.writeCommits(missing); err != nil {
 			return err
 		}
+		st.g.mark, st.g.durable = st.mark, st.mark
 	}
 	return nil
 }
@@ -145,6 +147,9 @@ func (g *logGroup) load() (*loadState, error) {
 			df.seal()
 		}
 	}
+	if err == nil && g.active.size > 0 {
+		err = g.active.f.Sync()
+	}
 	return st, err
 }
 
@@ -172,6 +177,8 @@ func (st *loadState) loadData(df *dataFile, last bool) (bool, error) {
 			st.applyPart(df.id, txid, parts, batch[1:])
 		} else if txid, ok := decodeTxCommit(batch[0]); ok && len(batch) == 1 {
 			st.commits[txid] = true
+		} else if index, ok := decodeMark(batch[0]); ok && len(batch) == 1 {
+			st.mark = max(st.mark, index)
 		} else {
 			for _, r := range batch {
 				if st.apply(df.id, r) {

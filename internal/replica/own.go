@@ -65,8 +65,8 @@ func openOwn(db *bitcask.DB, cfg Config, tune func(*node.Config)) (*ownNode, err
 		PreVote:         true,
 		CheckQuorum:     true,
 		NoSync:          cfg.UnsafeNoFsync,
-		SnapshotEntries: 1 << 16,
-		TrailingEntries: 10240,
+		CompactEntries:  1 << 16,
+		TrailingEntries: 1 << 16,
 		Logger:          slog.New(slog.NewTextHandler(out, &slog.HandlerOptions{Level: slog.LevelWarn})).With("raft", "own"),
 	}
 	if tune != nil {
