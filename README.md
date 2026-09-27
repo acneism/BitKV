@@ -67,8 +67,6 @@ CasketDB fits when:
 - losing an acknowledged write after a failover is unacceptable — idempotency keys, balances, counters, sessions, rate limits;
 - you want one multi-core node without setting up Redis Cluster.
 
-Redis, Valkey or Dragonfly fit better when you need hashes, lists, sets, sorted sets, pub/sub or scripting, the lowest possible latency on in-memory data, sharding across many nodes, ACLs and TLS.
-
 ## Documentation
 
 User guides:
