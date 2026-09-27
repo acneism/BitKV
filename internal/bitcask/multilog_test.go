@@ -3,8 +3,10 @@ package bitcask
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -174,6 +176,53 @@ func TestLogCountIsPersisted(t *testing.T) {
 
 	if _, err := Open(dir, multiOptions(2)); !errors.Is(err, ErrLayout) {
 		t.Fatalf("open with a different log count: err = %v, want ErrLayout", err)
+	}
+}
+
+func TestFilesArePrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows controls access with ACLs, not permission bits")
+	}
+	dir := filepath.Join(t.TempDir(), "db")
+	db := mustOpen(t, dir, multiOptions(2))
+	put(t, db, "before-flush", "v", 0)
+	if err := db.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 100 {
+		put(t, db, fmt.Sprintf("k%d", i), "v", 0)
+	}
+	if err := db.Merge(); err != nil {
+		t.Fatal(err)
+	}
+	mustClose(t, db)
+
+	hints := 0
+	files := 0
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			files++
+		}
+		if filepath.Ext(path) == hintExt {
+			hints++
+		}
+		if info.Mode().Perm()&0o077 != 0 {
+			t.Errorf("%s has mode %v, want no access for group and others", path, info.Mode().Perm())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files == 0 || hints == 0 {
+		t.Fatalf("files = %d, hint files = %d, want both above zero", files, hints)
 	}
 }
 

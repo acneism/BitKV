@@ -69,6 +69,8 @@ data/
   raft/         Raft state, only in a cluster
 ```
 
+Directories are created with mode `0700` and files with `0600`, readable only by the user that runs CasketDB. See [SECURITY.md](../SECURITY.md#security-model).
+
 The record format is described in [architecture](architecture.md#on-disk-format).
 
 ## Memory

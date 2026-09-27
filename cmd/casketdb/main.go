@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -49,6 +50,9 @@ func main() {
 	if cfg.requirePass == "" {
 		cfg.requirePass = os.Getenv("CASKETDB_REQUIREPASS")
 	}
+	if cfg.raftDir == "" {
+		cfg.raftDir = filepath.Join(cfg.dir, "raft")
+	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if err := run(logger, cfg); err != nil {
@@ -71,6 +75,7 @@ func run(logger *slog.Logger, cfg config) error {
 	}
 	st := db.Stats()
 	logger.Info("database loaded", "dir", cfg.dir, "keys", st.Keys, "logs", st.Logs, "files", st.DataFiles, "took", time.Since(started).Round(time.Millisecond))
+	warnIfShared(logger, cfg.dir)
 
 	var rep *replica.Node
 	if cfg.raftID != "" {
@@ -79,6 +84,7 @@ func run(logger *slog.Logger, cfg config) error {
 			return err
 		}
 		logger.Info("raft started", "id", cfg.raftID, "peers", cfg.raftPeers)
+		warnIfShared(logger, cfg.raftDir)
 		if cfg.raftNoFsync {
 			logger.Warn("raft log fsync is disabled (-raft-unsafe-no-fsync): a power loss can lose acknowledged writes")
 		}
@@ -123,16 +129,21 @@ func isLoopback(addr net.Addr) bool {
 	return ok && tcp.IP.IsLoopback()
 }
 
+func warnIfShared(logger *slog.Logger, dir string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if fi, err := os.Stat(dir); err == nil && fi.Mode().Perm()&0o077 != 0 {
+		logger.Warn("directory is accessible to other users; restrict it with chmod 700", "dir", dir, "mode", fi.Mode().Perm().String())
+	}
+}
+
 func openReplica(cfg config, db *bitcask.DB) (*replica.Node, error) {
 	peers, err := replica.ParsePeers(cfg.raftPeers)
 	if err != nil {
 		return nil, err
 	}
-	dir := cfg.raftDir
-	if dir == "" {
-		dir = filepath.Join(cfg.dir, "raft")
-	}
-	return replica.Open(db, replica.Config{ID: cfg.raftID, Peers: peers, Dir: dir, LogOutput: os.Stderr, UnsafeNoFsync: cfg.raftNoFsync})
+	return replica.Open(db, replica.Config{ID: cfg.raftID, Peers: peers, Dir: cfg.raftDir, LogOutput: os.Stderr, UnsafeNoFsync: cfg.raftNoFsync})
 }
 
 func closeStore(rep *replica.Node, db *bitcask.DB) error {

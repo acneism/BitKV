@@ -39,7 +39,7 @@ func fileName(id uint32, ext string) string {
 
 func openDataFile(dir string, id uint32) (*dataFile, error) {
 	path := filepath.Join(dir, fileName(id, dataExt))
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, fileMode)
 	if err != nil {
 		return nil, err
 	}

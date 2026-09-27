@@ -81,7 +81,7 @@ func (g *logGroup) writeMerge(dir string, inputs []*dataFile, boundary, reserve 
 	if err := os.RemoveAll(dir); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return nil, err
 	}
 	w := &mergeWriter{dir: dir, nextID: boundary + 1, lastID: boundary + reserve, maxSize: g.db.opts.MaxFileSize}
@@ -247,11 +247,11 @@ func (w *mergeWriter) rotate() error {
 	}
 	id := w.nextID
 	w.nextID++
-	data, err := os.OpenFile(filepath.Join(w.dir, fileName(id, dataExt)), os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
+	data, err := os.OpenFile(filepath.Join(w.dir, fileName(id, dataExt)), os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileMode)
 	if err != nil {
 		return err
 	}
-	hint, err := os.OpenFile(filepath.Join(w.dir, fileName(id, hintExt)), os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
+	hint, err := os.OpenFile(filepath.Join(w.dir, fileName(id, hintExt)), os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileMode)
 	if err != nil {
 		data.Close()
 		return err

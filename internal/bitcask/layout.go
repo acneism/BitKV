@@ -16,6 +16,8 @@ const (
 	metaMagic    = "casketdb-meta 1"
 	oldMetaMagic = "bitkv-meta 1"
 	defaultLogs  = 4
+	dirMode      = 0o700
+	fileMode     = 0o600
 )
 
 var ErrLayout = errors.New("bitcask: incompatible data directory layout")
@@ -81,7 +83,7 @@ func readMeta(root string) (int, bool, error) {
 
 func writeAtomic(dir, name string, data []byte) error {
 	tmp := filepath.Join(dir, name+".tmp")
-	f, err := os.Create(tmp)
+	f, err := os.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileMode)
 	if err != nil {
 		return err
 	}

@@ -39,7 +39,7 @@ type bitcaskFSM struct {
 }
 
 func newBitcaskFSM(db *bitcask.DB, dir string) (*bitcaskFSM, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 	f := &bitcaskFSM{db: db, dir: dir}
@@ -285,7 +285,7 @@ func readFileList(r *bufio.Reader) (int, []bitcask.SnapshotFile, error) {
 }
 
 func writeSync(path string, b []byte) error {
-	file, err := os.Create(path)
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
@@ -300,7 +300,7 @@ func writeSync(path string, b []byte) error {
 }
 
 func copyPrefix(from, to string, size int64) error {
-	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
 		return err
 	}
 	in, err := os.Open(from)
@@ -308,7 +308,7 @@ func copyPrefix(from, to string, size int64) error {
 		return err
 	}
 	defer in.Close()
-	out, err := os.Create(to)
+	out, err := os.OpenFile(to, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}

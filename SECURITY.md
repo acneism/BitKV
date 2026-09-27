@@ -19,5 +19,6 @@ Deploy CasketDB with these properties in mind:
 - **Loopback by default.** The server listens on `127.0.0.1:6379` unless `-addr` says otherwise, and logs a warning if it listens elsewhere without a password.
 - **Password in the environment.** Prefer `CASKETDB_REQUIREPASS` to `-requirepass`: command-line flags are visible in the process list.
 - **Unauthenticated Raft transport.** Cluster nodes trust any peer that connects to the Raft port. Keep Raft ports on a trusted network and firewall them from clients.
+- **Private files.** CasketDB creates its directories with mode `0700` and its files with `0600`, so other users of the server cannot read the data. It does not change the mode of an existing directory; if `-dir` or the Raft directory is open to other users, the server logs a warning at start. On Windows, access follows the ACLs inherited from the parent directory.
 - **No encryption at rest.** Data files hold keys and values as written. Protect the data directory with file-system permissions or disk encryption.
 - **Protocol limits.** A bulk string is limited by `-proto-max-bulk-len` (512 MB by default), a command by 1,048,576 arguments and an inline command by 64 KB. Large bulk strings are read as they arrive, never preallocated from the declared size.

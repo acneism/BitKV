@@ -2,6 +2,12 @@
 
 Versions are listed newest first. CasketDB was called BitKV up to and including v0.9.
 
+## Unreleased
+
+### Security
+
+- Directories are created with mode `0700` and files with `0600`. They used to be `0755` and `0644`, so on Linux every local user could read the data. The server logs a warning at start if an existing `-dir` or Raft directory is open to other users; run `chmod 700` on it.
+
 ## v0.10 — 2026-09-28
 
 ### Changed

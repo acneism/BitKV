@@ -73,7 +73,7 @@ func Open(dir string, opts Options) (*DB, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return nil, err
 	}
 	lock, err := lockFile(filepath.Join(dir, lockName))
@@ -98,7 +98,7 @@ func (db *DB) open() error {
 		return err
 	}
 	for i, d := range dirs {
-		if err := os.MkdirAll(d, 0o755); err != nil {
+		if err := os.MkdirAll(d, dirMode); err != nil {
 			return err
 		}
 		if err := recoverMerge(d); err != nil {
@@ -376,7 +376,7 @@ func (db *DB) LinkFiles(dir string) (int, []SnapshotFile, error) {
 }
 
 func linkOrCopy(src, dst string, size int64) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), dirMode); err != nil {
 		return err
 	}
 	if os.Link(src, dst) == nil {
@@ -387,7 +387,7 @@ func linkOrCopy(src, dst string, size int64) error {
 		return err
 	}
 	defer in.Close()
-	out, err := os.Create(dst)
+	out, err := os.OpenFile(dst, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileMode)
 	if err != nil {
 		return err
 	}
