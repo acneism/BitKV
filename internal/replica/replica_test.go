@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -13,7 +14,10 @@ import (
 	"time"
 
 	"github.com/acneism/BitKV/internal/bitcask"
-	"github.com/hashicorp/raft"
+	"github.com/acneism/raft"
+	"github.com/acneism/raft/node"
+	"github.com/acneism/raft/transport"
+	raftwal "github.com/acneism/raft/wal"
 )
 
 type testNode struct {
@@ -21,25 +25,17 @@ type testNode struct {
 	dir    string
 	peers  map[string]string
 	db     *bitcask.DB
-	node   Replica
+	node   *Node
 	unsafe bool
-	engine string
 }
 
-var raftConfig = testRaftConfig
+var tuning = testTuning
 
-var testSegmentSize = 8 << 10
-
-func testRaftConfig() *raft.Config {
-	c := raft.DefaultConfig()
-	c.HeartbeatTimeout = 50 * time.Millisecond
-	c.ElectionTimeout = 50 * time.Millisecond
-	c.LeaderLeaseTimeout = 50 * time.Millisecond
-	c.CommitTimeout = 5 * time.Millisecond
-	c.SnapshotInterval = 50 * time.Millisecond
-	c.SnapshotThreshold = 16
-	c.TrailingLogs = 4
-	return c
+func testTuning(c *node.Config) {
+	c.TickInterval = time.Millisecond
+	c.CompactEntries = 16
+	c.TrailingEntries = 4
+	c.SegmentSize = 8 << 10
 }
 
 func (tn *testNode) start(t testing.TB) {
@@ -50,13 +46,7 @@ func (tn *testNode) start(t testing.TB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{ID: tn.id, Peers: tn.peers, Dir: filepath.Join(tn.dir, "raft"), UnsafeNoFsync: tn.unsafe}
-	var n Replica
-	if tn.engine == EngineOwn {
-		n, err = openOwn(db, cfg, ownTuning)
-	} else {
-		n, err = open(db, cfg, raftConfig(), testSegmentSize)
-	}
+	n, err := open(db, Config{ID: tn.id, Peers: tn.peers, Dir: filepath.Join(tn.dir, "raft"), UnsafeNoFsync: tn.unsafe}, tuning)
 	if err != nil {
 		db.Close()
 		t.Fatal(err)
@@ -78,13 +68,13 @@ func (tn *testNode) stop(t testing.TB) {
 	tn.node = nil
 }
 
-func newCluster(t testing.TB, engine string, size int, unsafe bool) []*testNode {
+func newCluster(t testing.TB, size int, unsafe bool) []*testNode {
 	peers := make(map[string]string)
 	nodes := make([]*testNode, size)
 	for i := range nodes {
 		id := "n" + strconv.Itoa(i)
 		peers[id] = freeAddr(t)
-		nodes[i] = &testNode{id: id, dir: t.TempDir(), peers: peers, unsafe: unsafe, engine: engine}
+		nodes[i] = &testNode{id: id, dir: t.TempDir(), peers: peers, unsafe: unsafe}
 	}
 	for _, tn := range nodes {
 		tn.start(t)
@@ -95,6 +85,12 @@ func newCluster(t testing.TB, engine string, size int, unsafe bool) []*testNode 
 		}
 	})
 	return nodes
+}
+
+func eachMode(t *testing.T, fn func(t *testing.T, unsafe bool)) {
+	for _, unsafe := range []bool{false, true} {
+		t.Run("unsafe-no-fsync="+strconv.FormatBool(unsafe), func(t *testing.T) { fn(t, unsafe) })
+	}
 }
 
 func freeAddr(t testing.TB) string {
@@ -129,10 +125,7 @@ func leader(t testing.TB, nodes []*testNode) *testNode {
 	var found *testNode
 	eventually(t, "a ready leader", func() bool {
 		for _, tn := range nodes {
-			if tn.node == nil {
-				continue
-			}
-			if readyLeader(tn.node) {
+			if tn.node != nil && tn.node.term() != 0 {
 				found = tn
 				return true
 			}
@@ -140,6 +133,13 @@ func leader(t testing.TB, nodes []*testNode) *testNode {
 		return false
 	})
 	return found
+}
+
+func follower(nodes []*testNode, l *testNode) *testNode {
+	if nodes[0] != l {
+		return nodes[0]
+	}
+	return nodes[1]
 }
 
 func get(tn *testNode, key string) string {
@@ -181,12 +181,82 @@ func converged(nodes []*testNode, key, want string, keys int) func() bool {
 	}
 }
 
-func TestConcurrentWritesReplicate(t *testing.T) {
-	eachEngineMode(t, testConcurrentWrites)
+func latestSnapshot(tn *testNode) (raft.SnapshotMeta, string, bool) {
+	raftDir := filepath.Join(tn.dir, "raft")
+	des, _ := os.ReadDir(filepath.Join(raftDir, "snap"))
+	var best raft.SnapshotMeta
+	var path string
+	for _, de := range des {
+		var term, index uint64
+		if _, err := fmt.Sscanf(de.Name(), "%016x-%016x", &term, &index); err != nil || len(de.Name()) != 33 {
+			continue
+		}
+		if index > best.Index {
+			best, path = raft.SnapshotMeta{Index: index, Term: term}, filepath.Join(raftDir, "snap", de.Name())
+		}
+	}
+	return best, path, path != ""
 }
 
-func testConcurrentWrites(t *testing.T, engine string, unsafe bool) {
-	nodes := newCluster(t, engine, 3, unsafe)
+func voters(tn *testNode) raft.ConfState {
+	var ids []raft.NodeID
+	for id := range tn.peers {
+		ids = append(ids, raft.NodeID(id))
+	}
+	slices.Sort(ids)
+	return raft.ConfState{Voters: ids}
+}
+
+func firstLogIndex(t *testing.T, tn *testNode) uint64 {
+	t.Helper()
+	log, err := raftwal.Open(filepath.Join(tn.dir, "raft", "wal"), voters(tn), raftwal.Options{})
+	must(t, err)
+	defer log.Close()
+	first, err := log.FirstIndex()
+	must(t, err)
+	return first
+}
+
+func compact(t *testing.T, nodes []*testNode, l *testNode, prefix string) {
+	t.Helper()
+	for _, tn := range nodes {
+		if tn.node != nil {
+			must(t, tn.db.Sync())
+		}
+	}
+	for i := range 20 {
+		must(t, put(l, prefix+strconv.Itoa(i), "v"))
+	}
+}
+
+func copyDir(t *testing.T, from, to string) {
+	t.Helper()
+	must(t, filepath.WalkDir(from, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(from, path)
+		if d.IsDir() {
+			return os.MkdirAll(filepath.Join(to, rel), 0o755)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(to, rel), b, 0o644)
+	}))
+}
+
+func entry(index uint64, kind byte, ops ...bitcask.Op) raft.Entry {
+	return raft.Entry{Index: index, Term: 1, Data: encodeEntry(kind, ops)}
+}
+
+func TestConcurrentWritesReplicate(t *testing.T) {
+	eachMode(t, testConcurrentWrites)
+}
+
+func testConcurrentWrites(t *testing.T, unsafe bool) {
+	nodes := newCluster(t, 3, unsafe)
 	l := leader(t, nodes)
 	var wg sync.WaitGroup
 	errs := make(chan error, 8)
@@ -223,20 +293,17 @@ func testConcurrentWrites(t *testing.T, engine string, unsafe bool) {
 }
 
 func TestCatchUpAndFailover(t *testing.T) {
-	eachEngineMode(t, testCatchUpAndFailover)
+	eachMode(t, testCatchUpAndFailover)
 }
 
-func testCatchUpAndFailover(t *testing.T, engine string, unsafe bool) {
-	nodes := newCluster(t, engine, 3, unsafe)
+func testCatchUpAndFailover(t *testing.T, unsafe bool) {
+	nodes := newCluster(t, 3, unsafe)
 	l := leader(t, nodes)
 	for range 50 {
 		must(t, incr(l, "counter"))
 	}
 	eventually(t, "initial replication", converged(nodes, "counter", "50", 1))
-	lagging := nodes[0]
-	if lagging == l {
-		lagging = nodes[1]
-	}
+	lagging := follower(nodes, l)
 	lagging.stop(t)
 	for i := range 100 {
 		must(t, put(l, "k"+strconv.Itoa(i), "v"))
@@ -255,121 +322,8 @@ func testCatchUpAndFailover(t *testing.T, engine string, unsafe bool) {
 	eventually(t, "old leader to rejoin", converged(nodes, "after", "flush", 1))
 }
 
-func TestRefusesOldRaftLog(t *testing.T) {
-	dir := t.TempDir()
-	must(t, os.MkdirAll(filepath.Join(dir, "raft"), 0o755))
-	must(t, os.WriteFile(filepath.Join(dir, "raft", "raft.db"), nil, 0o644))
-	db, err := bitcask.Open(filepath.Join(dir, "data"), bitcask.DefaultOptions())
-	must(t, err)
-	defer db.Close()
-	peers := map[string]string{"n0": freeAddr(t)}
-	if _, err := open(db, Config{ID: "n0", Peers: peers, Dir: filepath.Join(dir, "raft")}, testRaftConfig(), testSegmentSize); !errors.Is(err, ErrOldRaftLog) {
-		t.Fatalf("open with raft.db: %v, want ErrOldRaftLog", err)
-	}
-}
-
-var engines = []string{EngineHashicorp, EngineOwn}
-
-func eachEngineMode(t *testing.T, fn func(t *testing.T, engine string, unsafe bool)) {
-	for _, engine := range engines {
-		for _, unsafe := range []bool{false, true} {
-			t.Run(engine+"/unsafe-no-fsync="+strconv.FormatBool(unsafe), func(t *testing.T) { fn(t, engine, unsafe) })
-		}
-	}
-}
-
-func readyLeader(r Replica) bool {
-	switch n := r.(type) {
-	case *Node:
-		_, err := n.lease()
-		return err == nil
-	case *ownNode:
-		return n.term() != 0
-	}
-	return false
-}
-
-func TestApplyBatchKeepsLogOrder(t *testing.T) {
-	db, err := bitcask.Open(filepath.Join(t.TempDir(), "data"), bitcask.DefaultOptions())
-	must(t, err)
-	defer db.Close()
-	n := &Node{db: db}
-	var id uint64
-	entry := func(kind byte, term, logTerm uint64, ops ...bitcask.Op) *raft.Log {
-		id++
-		return &raft.Log{Type: raft.LogCommand, Term: logTerm, Data: encodeEntry(kind, term, id, ops)}
-	}
-	set := func(k, v string) bitcask.Op { return bitcask.Op{Key: k, Value: []byte(v)} }
-	out := n.ApplyBatch([]*raft.Log{
-		entry(kindOps, 1, 1, set("a", "1"), set("b", "1"), set("x", "1")),
-		{Type: raft.LogConfiguration},
-		entry(kindOps, 1, 1, set("a", "2"), bitcask.Op{Key: "b", Delete: true}),
-		entry(kindOps, 1, 2, set("c", "1")),
-		entry(kindOps, 1, 1, set("b", "3")),
-		entry(kindFlush, 1, 1),
-		entry(kindOps, 1, 1, set("a", "4")),
-		entry(kindOps, 1, 1, set("b", "5"), bitcask.Op{Key: "a", Delete: true}),
-	})
-	for i, want := range []any{nil, nil, nil, errStale, nil, nil, nil, nil} {
-		if out[i] != want {
-			t.Fatalf("response %d = %v, want %v", i, out[i], want)
-		}
-	}
-	tn := &testNode{db: db}
-	for k, want := range map[string]string{"a": "", "b": "5", "c": "", "x": ""} {
-		if got := get(tn, k); got != want {
-			t.Fatalf("%s = %q, want %q", k, got, want)
-		}
-	}
-}
-
-func TestInterruptedRestoreResumes(t *testing.T) {
-	nodes := newCluster(t, EngineHashicorp, 3, false)
-	l := leader(t, nodes)
-	keys := make([]string, 60)
-	for i := range keys {
-		keys[i] = "k" + strconv.Itoa(i)
-		must(t, put(l, keys[i], "v"))
-	}
-	eventually(t, "replication", converged(nodes, "k59", "v", len(keys)))
-	f := nodes[0]
-	if f == l {
-		f = nodes[1]
-	}
-	must(t, f.node.(*Node).raft.Snapshot().Error())
-	f.stop(t)
-	db, err := bitcask.Open(filepath.Join(f.dir, "data"), bitcask.DefaultOptions())
-	must(t, err)
-	must(t, db.Update(bitcask.Keys(keys[:30]...), func(tx *bitcask.Tx) error {
-		for _, k := range keys[:30] {
-			tx.Delete(k)
-		}
-		return nil
-	}))
-	must(t, db.Close())
-	marker := filepath.Join(f.dir, "raft", restoringMarker)
-	must(t, os.WriteFile(marker, nil, 0o644))
-	f.start(t)
-	eventually(t, "interrupted restore to resume", converged(nodes, "k0", "v", len(keys)))
-	if fileExists(marker) {
-		t.Fatal("restore marker left behind")
-	}
-	for _, tn := range nodes {
-		entries, _ := os.ReadDir(filepath.Join(tn.dir, "raft", linksDir))
-		if len(entries) > retainSnapshots+1 {
-			t.Fatalf("%s keeps %d snapshot link dirs", tn.id, len(entries))
-		}
-	}
-}
-
 func TestHotKeyFailover(t *testing.T) {
-	for _, engine := range engines {
-		t.Run(engine, func(t *testing.T) { testHotKeyFailover(t, engine) })
-	}
-}
-
-func testHotKeyFailover(t *testing.T, engine string) {
-	nodes := newCluster(t, engine, 3, false)
+	nodes := newCluster(t, 3, false)
 	l := leader(t, nodes)
 	var acked, failed atomic.Int64
 	var wg sync.WaitGroup
@@ -409,4 +363,162 @@ func testHotKeyFailover(t *testing.T, engine string) {
 	must(t, incr(next, "counter"))
 	l.start(t)
 	eventually(t, "old leader to rejoin", converged(nodes, "counter", strconv.FormatInt(got+1, 10), 1))
+}
+
+func TestApplyKeepsLogOrder(t *testing.T) {
+	dir := t.TempDir()
+	db, err := bitcask.Open(filepath.Join(dir, "data"), bitcask.DefaultOptions())
+	must(t, err)
+	defer db.Close()
+	f, err := newBitcaskFSM(db, filepath.Join(dir, "raft"))
+	must(t, err)
+	set := func(k, v string) bitcask.Op { return bitcask.Op{Key: k, Value: []byte(v)} }
+	must(t, f.Apply([]raft.Entry{
+		entry(1, kindOps, set("a", "1"), set("b", "1"), set("x", "1")),
+		{Index: 2, Term: 1, Type: raft.EntryNoop},
+		entry(3, kindOps, set("a", "2"), bitcask.Op{Key: "b", Delete: true}),
+		entry(4, kindOps, set("b", "3")),
+		entry(5, kindFlush),
+		entry(6, kindOps, set("a", "4")),
+		entry(7, kindOps, set("b", "5"), bitcask.Op{Key: "a", Delete: true}),
+	}))
+	tn := &testNode{db: db}
+	for k, want := range map[string]string{"a": "", "b": "5", "x": ""} {
+		if got := get(tn, k); got != want {
+			t.Fatalf("%s = %q, want %q", k, got, want)
+		}
+	}
+	if f.applied.Load() != 7 {
+		t.Fatalf("applied %d, want 7", f.applied.Load())
+	}
+	if err := f.Apply([]raft.Entry{{Index: 8, Term: 1, Data: []byte{9}}}); !errors.Is(err, errEntry) {
+		t.Fatalf("malformed entry: %v", err)
+	}
+}
+
+func TestRefusesHashicorpRaftDir(t *testing.T) {
+	for _, name := range []string{"raft.db", filepath.Join("wal", "wal-meta.db")} {
+		dir := t.TempDir()
+		db, err := bitcask.Open(filepath.Join(dir, "data"), bitcask.DefaultOptions())
+		must(t, err)
+		raftDir := filepath.Join(dir, "raft")
+		must(t, os.MkdirAll(filepath.Join(raftDir, "wal"), 0o755))
+		must(t, os.WriteFile(filepath.Join(raftDir, name), nil, 0o644))
+		if _, err := Open(db, Config{ID: "n0", Peers: map[string]string{"n0": freeAddr(t)}, Dir: raftDir}); !errors.Is(err, ErrOldRaftLog) {
+			t.Fatalf("open over %s: %v, want ErrOldRaftLog", name, err)
+		}
+		must(t, db.Close())
+	}
+}
+
+func TestInterruptedRestoreResumes(t *testing.T) {
+	nodes := newCluster(t, 3, false)
+	l := leader(t, nodes)
+	keys := make([]string, 60)
+	for i := range keys {
+		keys[i] = "k" + strconv.Itoa(i)
+		must(t, put(l, keys[i], "v"))
+	}
+	eventually(t, "replication", converged(nodes, "k59", "v", len(keys)))
+	f := follower(nodes, l)
+	f.stop(t)
+	for i := range 40 {
+		must(t, put(l, "late"+strconv.Itoa(i), "v"))
+	}
+	src := t.TempDir()
+	snap, err := l.node.fsm.Snapshot(src)
+	must(t, err)
+	snap.Term = l.node.Status().Term
+	snap.Conf = voters(f)
+	raftDir := filepath.Join(f.dir, "raft")
+	copyDir(t, src, transport.IncomingDir(filepath.Join(raftDir, "snap"), snap))
+	log, err := raftwal.Open(filepath.Join(raftDir, "wal"), snap.Conf, raftwal.Options{})
+	must(t, err)
+	if cur, _ := log.Snapshot(); cur.Index >= snap.Index {
+		t.Fatalf("follower snapshot %d is not behind the leader's %d", cur.Index, snap.Index)
+	}
+	must(t, log.SetRestoring(&snap))
+	must(t, log.Close())
+	db, err := bitcask.Open(filepath.Join(f.dir, "data"), bitcask.DefaultOptions())
+	must(t, err)
+	must(t, db.Update(bitcask.Keys(keys[:30]...), func(tx *bitcask.Tx) error {
+		for _, k := range keys[:30] {
+			tx.Delete(k)
+		}
+		return nil
+	}))
+	must(t, db.Close())
+	f.start(t)
+	eventually(t, "interrupted restore to resume", converged(nodes, "late39", "v", len(keys)+40))
+	f.stop(t)
+	log, err = raftwal.Open(filepath.Join(raftDir, "wal"), snap.Conf, raftwal.Options{})
+	must(t, err)
+	defer log.Close()
+	if log.Restoring() != nil {
+		t.Fatal("restore marker left behind")
+	}
+}
+
+func TestCompactsWithoutSnapshots(t *testing.T) {
+	nodes := newCluster(t, 3, false)
+	l := leader(t, nodes)
+	for i := range 100 {
+		must(t, put(l, "k"+strconv.Itoa(i), "v"))
+	}
+	compact(t, nodes, l, "fill")
+	must(t, put(l, "last", "v"))
+	eventually(t, "replication", converged(nodes, "last", "v", 121))
+	for _, tn := range nodes {
+		tn.stop(t)
+		if first := firstLogIndex(t, tn); first < 80 {
+			t.Fatalf("%s: the log still starts at %d", tn.id, first)
+		}
+		if _, _, ok := latestSnapshot(tn); ok {
+			t.Fatalf("%s took a snapshot while every follower kept up", tn.id)
+		}
+	}
+}
+
+func TestRestartReplaysOnlyTail(t *testing.T) {
+	nodes := newCluster(t, 3, false)
+	l := leader(t, nodes)
+	for i := range 50 {
+		must(t, put(l, "k"+strconv.Itoa(i), "v"))
+	}
+	eventually(t, "replication", converged(nodes, "k49", "v", 50))
+	f := follower(nodes, l)
+	applied := f.node.fsm.applied.Load()
+	f.stop(t)
+	db, err := bitcask.Open(filepath.Join(f.dir, "data"), bitcask.DefaultOptions())
+	must(t, err)
+	durable := db.DurableIndex()
+	must(t, db.Close())
+	if durable != applied {
+		t.Fatalf("durable index after a clean stop is %d, applied %d", durable, applied)
+	}
+	for i := range 10 {
+		must(t, put(l, "late"+strconv.Itoa(i), "v"))
+	}
+	f.start(t)
+	eventually(t, "restarted follower to catch up", converged(nodes, "late9", "v", 60))
+	if first := f.node.fsm.first.Load(); first != durable+1 {
+		t.Fatalf("the restarted follower applied from %d, want %d", first, durable+1)
+	}
+}
+
+func TestLaggingFollowerCatchesUpBySnapshot(t *testing.T) {
+	nodes := newCluster(t, 3, false)
+	l := leader(t, nodes)
+	f := follower(nodes, l)
+	f.stop(t)
+	for i := range 60 {
+		must(t, put(l, "k"+strconv.Itoa(i), "v"))
+	}
+	compact(t, nodes, l, "fill")
+	f.start(t)
+	eventually(t, "lagging follower to catch up", converged(nodes, "fill19", "v", 80))
+	eventually(t, "the lagging follower to install a snapshot", func() bool {
+		_, _, ok := latestSnapshot(f)
+		return ok
+	})
 }

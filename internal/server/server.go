@@ -27,7 +27,7 @@ type Config struct {
 	MaxBulkLen  int
 	RequirePass string
 	Logger      *slog.Logger
-	Replica     replica.Replica
+	Replica     *replica.Node
 }
 
 type Server struct {

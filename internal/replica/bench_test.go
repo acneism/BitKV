@@ -8,42 +8,35 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/raft"
-	wal "github.com/hashicorp/raft-wal"
+	"github.com/acneism/raft/node"
 )
 
-func benchRaftConfig() *raft.Config {
-	c := testRaftConfig()
-	c.SnapshotThreshold = snapshotThreshold
-	c.SnapshotInterval = raft.DefaultConfig().SnapshotInterval
-	c.TrailingLogs = raft.DefaultConfig().TrailingLogs
-	return c
+func benchTuning(c *node.Config) {
+	c.TickInterval = time.Millisecond
 }
 
 func benchModes(b *testing.B, fn func(b *testing.B, l *testNode)) {
-	for _, engine := range engines {
-		for _, unsafe := range []bool{false, true} {
-			b.Run(engine+"/unsafe-no-fsync="+strconv.FormatBool(unsafe), func(b *testing.B) {
-				raftConfig, testSegmentSize, ownTuning = benchRaftConfig, wal.DefaultSegmentSize, benchOwnTuning
-				b.Cleanup(func() { raftConfig, testSegmentSize, ownTuning = testRaftConfig, 8<<10, testOwnTuning })
-				nodes := newCluster(b, engine, 3, unsafe)
-				l := leader(b, nodes)
-				b.SetParallelism(16)
-				b.ResetTimer()
-				fn(b, l)
-				b.StopTimer()
-				start, target := time.Now(), l.node.Status().Applied
-				eventually(b, "followers to catch up", func() bool {
-					for _, tn := range nodes {
-						if tn.node.Status().Applied < target {
-							return false
-						}
+	for _, unsafe := range []bool{false, true} {
+		b.Run("unsafe-no-fsync="+strconv.FormatBool(unsafe), func(b *testing.B) {
+			tuning = benchTuning
+			b.Cleanup(func() { tuning = testTuning })
+			nodes := newCluster(b, 3, unsafe)
+			l := leader(b, nodes)
+			b.SetParallelism(16)
+			b.ResetTimer()
+			fn(b, l)
+			b.StopTimer()
+			start, target := time.Now(), l.node.Status().Applied
+			eventually(b, "followers to catch up", func() bool {
+				for _, tn := range nodes {
+					if tn.node.Status().Applied < target {
+						return false
 					}
-					return true
-				})
-				b.ReportMetric(float64(time.Since(start).Microseconds())/1000, "catchup-ms")
+				}
+				return true
 			})
-		}
+			b.ReportMetric(float64(time.Since(start).Microseconds())/1000, "catchup-ms")
+		})
 	}
 }
 

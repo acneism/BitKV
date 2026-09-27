@@ -26,7 +26,6 @@ type config struct {
 	raftPeers   string
 	raftDir     string
 	raftNoFsync bool
-	raftEngine  string
 	opts        bitcask.Options
 }
 
@@ -45,7 +44,6 @@ func main() {
 	flag.StringVar(&cfg.raftID, "raft-id", "", "raft node id; enables replication")
 	flag.StringVar(&cfg.raftPeers, "raft-peers", "", "all raft nodes including this one: id=host:port,id=host:port")
 	flag.StringVar(&cfg.raftDir, "raft-dir", "", "raft log and snapshot directory (default <dir>/raft)")
-	flag.StringVar(&cfg.raftEngine, "raft-engine", replica.EngineHashicorp, "raft implementation: hashicorp or own")
 	flag.BoolVar(&cfg.raftNoFsync, "raft-unsafe-no-fsync", false, "skip fsync of the raft log: faster, but a power loss on one node followed by a leader failure can lose acknowledged writes")
 	flag.Parse()
 	if cfg.requirePass == "" {
@@ -74,13 +72,13 @@ func run(logger *slog.Logger, cfg config) error {
 	st := db.Stats()
 	logger.Info("database loaded", "dir", cfg.dir, "keys", st.Keys, "logs", st.Logs, "files", st.DataFiles, "took", time.Since(started).Round(time.Millisecond))
 
-	var rep replica.Replica
+	var rep *replica.Node
 	if cfg.raftID != "" {
 		if rep, err = openReplica(cfg, db); err != nil {
 			db.Close()
 			return err
 		}
-		logger.Info("raft started", "id", cfg.raftID, "peers", cfg.raftPeers, "engine", cfg.raftEngine)
+		logger.Info("raft started", "id", cfg.raftID, "peers", cfg.raftPeers)
 		if cfg.raftNoFsync {
 			logger.Warn("raft log fsync is disabled (-raft-unsafe-no-fsync): a power loss can lose acknowledged writes")
 		}
@@ -125,7 +123,7 @@ func isLoopback(addr net.Addr) bool {
 	return ok && tcp.IP.IsLoopback()
 }
 
-func openReplica(cfg config, db *bitcask.DB) (replica.Replica, error) {
+func openReplica(cfg config, db *bitcask.DB) (*replica.Node, error) {
 	peers, err := replica.ParsePeers(cfg.raftPeers)
 	if err != nil {
 		return nil, err
@@ -134,10 +132,10 @@ func openReplica(cfg config, db *bitcask.DB) (replica.Replica, error) {
 	if dir == "" {
 		dir = filepath.Join(cfg.dir, "raft")
 	}
-	return replica.Open(db, replica.Config{ID: cfg.raftID, Peers: peers, Dir: dir, LogOutput: os.Stderr, UnsafeNoFsync: cfg.raftNoFsync, Engine: cfg.raftEngine})
+	return replica.Open(db, replica.Config{ID: cfg.raftID, Peers: peers, Dir: dir, LogOutput: os.Stderr, UnsafeNoFsync: cfg.raftNoFsync})
 }
 
-func closeStore(rep replica.Replica, db *bitcask.DB) error {
+func closeStore(rep *replica.Node, db *bitcask.DB) error {
 	var err error
 	if rep != nil {
 		err = rep.Close()

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,7 +15,21 @@ import (
 	"github.com/acneism/raft/node"
 )
 
-const snapshotInfo = "bitkv-snapshot"
+const (
+	kindOps    byte = 1
+	kindFlush  byte = 2
+	flagDelete byte = 1
+
+	maxField     = 1<<32 - 1
+	restoreBatch = 1024
+	restoreDir   = "restore"
+	snapshotInfo = "bitkv-snapshot"
+)
+
+var (
+	errEntry    = errors.New("replica: malformed log entry")
+	errSnapshot = errors.New("replica: malformed snapshot")
+)
 
 type bitcaskFSM struct {
 	db      *bitcask.DB
@@ -30,33 +45,6 @@ func newBitcaskFSM(db *bitcask.DB, dir string) (*bitcaskFSM, error) {
 	f := &bitcaskFSM{db: db, dir: dir}
 	f.applied.Store(db.DurableIndex())
 	return f, nil
-}
-
-func writeSync(path string, b []byte) error {
-	file, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	_, err = file.Write(b)
-	if err == nil {
-		err = file.Sync()
-	}
-	if cerr := file.Close(); err == nil {
-		err = cerr
-	}
-	return err
-}
-
-func encodeOwnEntry(kind byte, ops []bitcask.Op) []byte {
-	size := 1
-	for _, op := range ops {
-		size += 1 + 3*binary.MaxVarintLen64 + len(op.Key) + len(op.Value)
-	}
-	b := append(make([]byte, 0, size), kind)
-	for _, op := range ops {
-		b = appendOp(b, op)
-	}
-	return b
 }
 
 func (f *bitcaskFSM) Apply(ents []raft.Entry) error {
@@ -130,7 +118,7 @@ func (f *bitcaskFSM) Restore(src node.SnapshotSource) error {
 	if err != nil {
 		return err
 	}
-	logs, files, err := readFileList(bufio.NewReader(bytes.NewReader(info)), nil)
+	logs, files, err := readFileList(bufio.NewReader(bytes.NewReader(info)))
 	if err != nil {
 		return err
 	}
@@ -179,6 +167,136 @@ func (f *bitcaskFSM) Restore(src node.SnapshotSource) error {
 	}
 	f.applied.Store(src.Meta.Index)
 	return nil
+}
+
+func encodeEntry(kind byte, ops []bitcask.Op) []byte {
+	size := 1
+	for _, op := range ops {
+		size += 1 + 3*binary.MaxVarintLen64 + len(op.Key) + len(op.Value)
+	}
+	b := append(make([]byte, 0, size), kind)
+	for _, op := range ops {
+		b = appendOp(b, op)
+	}
+	return b
+}
+
+func decodeOps(body *bytes.Reader) ([]bitcask.Op, error) {
+	var ops []bitcask.Op
+	for body.Len() > 0 {
+		op, err := readOp(body)
+		if err != nil {
+			return nil, errEntry
+		}
+		ops = append(ops, op)
+	}
+	return ops, nil
+}
+
+func appendOp(b []byte, op bitcask.Op) []byte {
+	var flags byte
+	if op.Delete {
+		flags = flagDelete
+	}
+	b = append(b, flags)
+	b = binary.AppendVarint(b, op.ExpireAt)
+	b = binary.AppendUvarint(b, uint64(len(op.Key)))
+	b = append(b, op.Key...)
+	b = binary.AppendUvarint(b, uint64(len(op.Value)))
+	return append(b, op.Value...)
+}
+
+type byteReader interface {
+	io.Reader
+	io.ByteReader
+}
+
+func readOp(r byteReader) (bitcask.Op, error) {
+	flags, err := r.ReadByte()
+	if err != nil {
+		return bitcask.Op{}, err
+	}
+	op := bitcask.Op{Delete: flags&flagDelete != 0}
+	if op.ExpireAt, err = binary.ReadVarint(r); err != nil {
+		return op, unexpected(err)
+	}
+	key, err := readField(r)
+	if err != nil {
+		return op, err
+	}
+	op.Key = string(key)
+	op.Value, err = readField(r)
+	return op, err
+}
+
+func readField(r byteReader) ([]byte, error) {
+	n, err := binary.ReadUvarint(r)
+	if err != nil {
+		return nil, unexpected(err)
+	}
+	if n > maxField {
+		return nil, errEntry
+	}
+	b := make([]byte, n)
+	_, err = io.ReadFull(r, b)
+	return b, unexpected(err)
+}
+
+func unexpected(err error) error {
+	if err == io.EOF {
+		return io.ErrUnexpectedEOF
+	}
+	return err
+}
+
+func appendFileList(b []byte, logs, count int) []byte {
+	b = binary.AppendUvarint(b, uint64(logs))
+	return binary.AppendUvarint(b, uint64(count))
+}
+
+func appendFileEntry(b []byte, sf bitcask.SnapshotFile) []byte {
+	b = binary.AppendUvarint(b, uint64(len(sf.Path)))
+	b = append(b, sf.Path...)
+	return binary.AppendUvarint(b, uint64(sf.Size))
+}
+
+func readFileList(r *bufio.Reader) (int, []bitcask.SnapshotFile, error) {
+	logs, err := binary.ReadUvarint(r)
+	if err != nil || logs == 0 || logs > 1<<16 {
+		return 0, nil, errSnapshot
+	}
+	count, err := binary.ReadUvarint(r)
+	if err != nil {
+		return 0, nil, errSnapshot
+	}
+	var files []bitcask.SnapshotFile
+	for range count {
+		path, err := readField(r)
+		if err != nil {
+			return 0, nil, errSnapshot
+		}
+		size, err := binary.ReadUvarint(r)
+		if err != nil || !filepath.IsLocal(filepath.FromSlash(string(path))) {
+			return 0, nil, errSnapshot
+		}
+		files = append(files, bitcask.SnapshotFile{Path: string(path), Size: int64(size)})
+	}
+	return int(logs), files, nil
+}
+
+func writeSync(path string, b []byte) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	_, err = file.Write(b)
+	if err == nil {
+		err = file.Sync()
+	}
+	if cerr := file.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 func copyPrefix(from, to string, size int64) error {
