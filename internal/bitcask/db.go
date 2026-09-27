@@ -53,6 +53,7 @@ type DB struct {
 	writes      atomic.Int64
 	fsyncs      atomic.Int64
 	expiredKeys atomic.Int64
+	applied     atomic.Uint64
 
 	expireCursor int
 
@@ -163,6 +164,7 @@ func (db *DB) unlockGroups() {
 func (db *DB) Close() error {
 	db.stopOnce.Do(func() { close(db.stop) })
 	db.wg.Wait()
+	_ = db.reserveMarks()
 	db.lockGroups()
 	defer db.unlockGroups()
 	if db.closed.Load() {
@@ -235,11 +237,19 @@ func (db *DB) Keys(match func(string) bool) []string {
 	return keys
 }
 
-func (db *DB) MarkIndex(index uint64) error {
+func (db *DB) MarkApplied(index uint64) {
+	db.applied.Store(index)
+}
+
+func (db *DB) reserveMarks() error {
+	index := db.applied.Load()
+	if index == 0 {
+		return nil
+	}
 	for _, g := range db.groups {
 		g.logMu.Lock()
 		err := db.stateErr()
-		if err == nil {
+		if err == nil && index > g.mark {
 			_, err = g.reserveMarkLocked(index)
 		}
 		g.logMu.Unlock()
@@ -259,6 +269,9 @@ func (db *DB) DurableIndex() uint64 {
 }
 
 func (db *DB) writeQueued() {
+	if db.reserveMarks() != nil {
+		return
+	}
 	for _, g := range db.groups {
 		g.logMu.Lock()
 		seq := g.seq

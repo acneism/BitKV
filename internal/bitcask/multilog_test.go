@@ -252,9 +252,7 @@ func markedWrites(t *testing.T, db *DB, from, to int) {
 		if err := db.Apply(ops, 0); err != nil {
 			t.Fatal(err)
 		}
-		if err := db.MarkIndex(uint64(i)); err != nil {
-			t.Fatal(err)
-		}
+		db.MarkApplied(uint64(i))
 	}
 }
 

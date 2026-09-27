@@ -101,9 +101,7 @@ func (f *bitcaskFSM) Apply(ents []raft.Entry) error {
 	}
 	if n := len(ents); n > 0 {
 		f.first.CompareAndSwap(0, ents[0].Index)
-		if err := f.db.MarkIndex(ents[n-1].Index); err != nil {
-			return err
-		}
+		f.db.MarkApplied(ents[n-1].Index)
 		f.applied.Store(ents[n-1].Index)
 	}
 	return nil
@@ -173,9 +171,7 @@ func (f *bitcaskFSM) Restore(src node.SnapshotSource) error {
 		err = f.db.Apply(batch, 0)
 	}
 	if err == nil {
-		err = f.db.MarkIndex(src.Meta.Index)
-	}
-	if err == nil {
+		f.db.MarkApplied(src.Meta.Index)
 		err = f.db.Sync()
 	}
 	if err != nil {

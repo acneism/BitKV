@@ -67,6 +67,9 @@ func (db *DB) stateErr() error {
 }
 
 func (db *DB) Sync() error {
+	if err := db.reserveMarks(); err != nil {
+		return err
+	}
 	for _, g := range db.groups {
 		if err := g.sync(); err != nil {
 			return err

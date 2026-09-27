@@ -96,10 +96,11 @@ func (g *logGroup) reserveMarkLocked(index uint64) (uint64, error) {
 }
 
 func (g *logGroup) carryMarkLocked() error {
-	if g.mark == 0 {
+	index := max(g.mark, g.db.applied.Load())
+	if index == 0 {
 		return nil
 	}
-	seq, err := g.reserveMarkLocked(g.mark)
+	seq, err := g.reserveMarkLocked(index)
 	if err != nil {
 		return err
 	}
