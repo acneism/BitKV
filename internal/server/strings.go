@@ -4,7 +4,7 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/acneism/BitKV/internal/bitcask"
+	"github.com/acneism/casketdb/internal/bitcask"
 )
 
 func absoluteExpire(now int64, unit string, n int64) (int64, bool) {

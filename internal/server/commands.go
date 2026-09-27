@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/acneism/BitKV/internal/bitcask"
+	"github.com/acneism/casketdb/internal/bitcask"
 )
 
 const (
@@ -380,7 +380,7 @@ func cmdInfo(s *Server, c *client, args [][]byte) reply {
 	}
 	line("# Server")
 	line("redis_version:%s", redisVersion)
-	line("bitkv_version:%s", Version)
+	line("casketdb_version:%s", Version)
 	line("redis_mode:standalone")
 	line("os:%s %s", runtime.GOOS, runtime.GOARCH)
 	line("process_id:%d", os.Getpid())

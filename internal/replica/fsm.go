@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 
-	"github.com/acneism/BitKV/internal/bitcask"
+	"github.com/acneism/casketdb/internal/bitcask"
 	"github.com/acneism/raft"
 	"github.com/acneism/raft/node"
 )
@@ -23,7 +23,7 @@ const (
 	maxField     = 1<<32 - 1
 	restoreBatch = 1024
 	restoreDir   = "restore"
-	snapshotInfo = "bitkv-snapshot"
+	snapshotInfo = "casketdb-snapshot"
 )
 
 var (

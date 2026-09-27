@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/acneism/BitKV/internal/bitcask"
-	"github.com/acneism/BitKV/internal/replica"
-	"github.com/acneism/BitKV/internal/server"
+	"github.com/acneism/casketdb/internal/bitcask"
+	"github.com/acneism/casketdb/internal/replica"
+	"github.com/acneism/casketdb/internal/server"
 )
 
 type config struct {
@@ -40,14 +40,14 @@ func main() {
 	flag.DurationVar(&cfg.opts.MergeInterval, "merge-interval", cfg.opts.MergeInterval, "automatic merge check interval, 0 disables it")
 	flag.IntVar(&cfg.opts.Logs, "logs", 0, "number of parallel data logs for a new database (0 means 4; an existing database keeps its own)")
 	flag.IntVar(&cfg.maxBulk, "proto-max-bulk-len", 512<<20, "maximum bulk string length in bytes")
-	flag.StringVar(&cfg.requirePass, "requirepass", "", "password clients must AUTH with (default from BITKV_REQUIREPASS)")
+	flag.StringVar(&cfg.requirePass, "requirepass", "", "password clients must AUTH with (default from CASKETDB_REQUIREPASS)")
 	flag.StringVar(&cfg.raftID, "raft-id", "", "raft node id; enables replication")
 	flag.StringVar(&cfg.raftPeers, "raft-peers", "", "all raft nodes including this one: id=host:port,id=host:port")
 	flag.StringVar(&cfg.raftDir, "raft-dir", "", "raft log and snapshot directory (default <dir>/raft)")
 	flag.BoolVar(&cfg.raftNoFsync, "raft-unsafe-no-fsync", false, "skip fsync of the raft log: faster, but a power loss on one node followed by a leader failure can lose acknowledged writes")
 	flag.Parse()
 	if cfg.requirePass == "" {
-		cfg.requirePass = os.Getenv("BITKV_REQUIREPASS")
+		cfg.requirePass = os.Getenv("CASKETDB_REQUIREPASS")
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))

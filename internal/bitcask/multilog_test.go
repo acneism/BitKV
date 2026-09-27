@@ -177,6 +177,23 @@ func TestLogCountIsPersisted(t *testing.T) {
 	}
 }
 
+func TestBitKVMetaOpens(t *testing.T) {
+	dir := t.TempDir()
+	db := mustOpen(t, dir, multiOptions(2))
+	put(t, db, "k", "v", 0)
+	mustClose(t, db)
+	if err := os.WriteFile(filepath.Join(dir, metaName), []byte(oldMetaMagic+"\nlogs 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	db = mustOpen(t, dir, multiOptions(0))
+	defer mustClose(t, db)
+	if st := db.Stats(); st.Logs != 2 {
+		t.Fatalf("logs = %d, want 2", st.Logs)
+	}
+	expect(t, db, "k", "v")
+}
+
 func TestLegacySingleLogLayoutOpens(t *testing.T) {
 	dir := t.TempDir()
 	db := mustOpen(t, dir, multiOptions(1))

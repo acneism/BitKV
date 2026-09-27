@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/acneism/BitKV/internal/bitcask"
+	"github.com/acneism/casketdb/internal/bitcask"
 	"github.com/acneism/raft"
 	"github.com/acneism/raft/node"
 )
@@ -22,7 +22,7 @@ var (
 	ErrNotLeader      = errors.New("replica: not the leader")
 	ErrLeadershipLost = errors.New("replica: write interrupted by a leadership change, it may or may not be applied")
 	ErrNotEmpty       = errors.New("replica: database has data but no raft state, start the node from an empty directory")
-	ErrOldRaftLog     = errors.New("replica: the raft directory was written by hashicorp/raft (BitKV v0.9 or older), start the node from an empty directory")
+	ErrOldRaftLog     = errors.New("replica: the raft directory was written by hashicorp/raft (CasketDB v0.9 or older), start the node from an empty directory")
 )
 
 type Config struct {

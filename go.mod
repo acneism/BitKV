@@ -1,4 +1,4 @@
-module github.com/acneism/BitKV
+module github.com/acneism/casketdb
 
 go 1.26.1
 

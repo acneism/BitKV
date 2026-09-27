@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/acneism/BitKV/internal/bitcask"
+	"github.com/acneism/casketdb/internal/bitcask"
 	"github.com/acneism/raft"
 )
 

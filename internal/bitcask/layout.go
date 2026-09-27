@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	metaName    = "META"
-	flushName   = "FLUSH"
-	metaMagic   = "bitkv-meta 1"
-	defaultLogs = 4
+	metaName     = "META"
+	flushName    = "FLUSH"
+	metaMagic    = "casketdb-meta 1"
+	oldMetaMagic = "bitkv-meta 1"
+	defaultLogs  = 4
 )
 
 var ErrLayout = errors.New("bitcask: incompatible data directory layout")
@@ -68,7 +69,7 @@ func readMeta(root string) (int, bool, error) {
 		return 0, false, err
 	}
 	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
-	if len(lines) < 2 || lines[0] != metaMagic {
+	if len(lines) < 2 || (lines[0] != metaMagic && lines[0] != oldMetaMagic) {
 		return 0, false, fmt.Errorf("%w: unrecognized %s", ErrLayout, metaName)
 	}
 	logs, err := strconv.Atoi(strings.TrimPrefix(lines[1], "logs "))

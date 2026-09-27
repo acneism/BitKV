@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/acneism/BitKV/internal/bitcask"
+	"github.com/acneism/casketdb/internal/bitcask"
 	"github.com/acneism/raft"
 	"github.com/acneism/raft/node"
 	"github.com/acneism/raft/transport"

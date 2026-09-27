@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/acneism/BitKV/internal/bitcask"
-	"github.com/acneism/BitKV/internal/replica"
-	"github.com/acneism/BitKV/internal/resp"
+	"github.com/acneism/casketdb/internal/bitcask"
+	"github.com/acneism/casketdb/internal/replica"
+	"github.com/acneism/casketdb/internal/resp"
 )
 
 const (

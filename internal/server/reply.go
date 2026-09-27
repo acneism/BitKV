@@ -3,8 +3,8 @@ package server
 import (
 	"errors"
 
-	"github.com/acneism/BitKV/internal/replica"
-	"github.com/acneism/BitKV/internal/resp"
+	"github.com/acneism/casketdb/internal/replica"
+	"github.com/acneism/casketdb/internal/resp"
 )
 
 type reply interface {

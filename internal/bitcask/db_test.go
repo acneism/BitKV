@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/acneism/BitKV/internal/clock"
+	"github.com/acneism/casketdb/internal/clock"
 )
 
 func testOptions() Options {
