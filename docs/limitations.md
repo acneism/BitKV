@@ -28,7 +28,6 @@ These are deliberate choices, not missing features:
 | Expiry depends on the system clock | Detect a backward clock jump at start |
 | No online backup | A backup command built on the hard-link snapshots |
 | Snapshots hold hard links, so disk space of files deleted by merge is freed only when the snapshot is dropped | Keep one snapshot, or align merges with snapshots |
-| Reads from followers and from a deposed leader can be stale | ReadIndex for linearizable reads behind a flag |
 | Cluster membership is set by a flag and cannot change at runtime | Commands to add and remove nodes (Raft configuration changes) |
 | Clients find the leader themselves, from `INFO replication` or a `READONLY` reply | Proxy writes to the leader, or reply with its address |
 | The Raft transport has no authentication or encryption; the library supports TLS, but CasketDB has no flags for it | Certificate flags for mTLS between nodes |

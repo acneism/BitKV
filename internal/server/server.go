@@ -303,7 +303,7 @@ func (s *Server) run(c *client, cmd command, args [][]byte) reply {
 	}
 	var err error
 	if cmd.kind == kindRead {
-		err = s.db.View(scope, fn)
+		err = s.view(scope, fn)
 	} else {
 		err = s.update(scope, fn)
 	}
@@ -311,6 +311,15 @@ func (s *Server) run(c *client, cmd command, args [][]byte) reply {
 		return storageError(err)
 	}
 	return r
+}
+
+func (s *Server) view(scope bitcask.Scope, fn func(tx *bitcask.Tx) error) error {
+	if s.cfg.Replica != nil {
+		if err := s.cfg.Replica.ReadBarrier(); err != nil {
+			return err
+		}
+	}
+	return s.db.View(scope, fn)
 }
 
 func (s *Server) update(scope bitcask.Scope, fn func(tx *bitcask.Tx) error) error {

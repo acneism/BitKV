@@ -20,6 +20,8 @@ CasketDB is configured with command-line flags. There is no configuration file a
 | `-raft-peers` | empty | All cluster nodes including this one: `id=host:port,…`. Must be the same on every node |
 | `-raft-dir` | `<dir>/raft` | Raft log and snapshots |
 | `-raft-unsafe-no-fsync` | `false` | Do not fsync the Raft log. Faster, but see [replication](replication.md#running-without-fsync) |
+| `-raft-reads` | `local` | Read consistency in a cluster: `local` (may be stale), `linearizable` or `lease`, see [consistent reads](replication.md#consistent-reads) |
+| `-raft-max-clock-drift` | `0.1` | Largest relative difference between node clock rates that `-raft-reads lease` tolerates |
 
 Sizes are given in bytes, for example `-max-file-size 134217728` for 128 MB. Durations use Go syntax: `30s`, `5m`.
 

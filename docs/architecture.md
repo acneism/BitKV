@@ -69,6 +69,8 @@ Step 4 is idempotent and is completed on the next start. `merge/` without `MERGE
 - `Snapshot` calls `db.LinkFiles`, which syncs, then hard-links every data and hint file under `txGate`, and writes the file list with lengths to `casketdb-snapshot`.
 - `Restore` copies the listed prefixes into a temporary database, opens it with the normal loader, flushes the main database, copies the keys in batches of 1024 and syncs with the snapshot index marked.
 
+`ReadBarrier` implements consistent reads: with `-raft-reads linearizable` or `lease`, the server calls it before every read transaction. It asks the library for a read index (`ReadIndex`), waits until the node has applied that index (`WaitApplied`) and returns; the read then runs against the local engine. The library resolves a read index before the entries up to it are applied, so the wait is required.
+
 The engine side of speculative writes is `db.Propose(scope, term, fn, publish)`: the transaction hands its operations to `publish`, which proposes them to Raft, and stages the values as proposed instead of writing them. Proposed values are visible only to writers of the same term. `db.Apply(ops, upTo)` writes replicated operations and clears proposed marks up to `upTo`; `db.DropProposed` clears all of them.
 
 ### Index marks

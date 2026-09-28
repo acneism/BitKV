@@ -66,8 +66,11 @@ func boolReply(b bool) intReply {
 }
 
 func storageError(err error) errorReply {
-	if errors.Is(err, replica.ErrNotLeader) {
+	switch {
+	case errors.Is(err, replica.ErrNotLeader):
 		return errorReply("READONLY You can't write against a read only replica.")
+	case errors.Is(err, replica.ErrUnconfirmed):
+		return errorReply("TRYAGAIN No leader confirmed the read, retry.")
 	}
 	return errorReply("ERR " + err.Error())
 }

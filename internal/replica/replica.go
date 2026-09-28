@@ -23,7 +23,28 @@ var (
 	ErrLeadershipLost = errors.New("replica: write interrupted by a leadership change, it may or may not be applied")
 	ErrNotEmpty       = errors.New("replica: database has data but no raft state, start the node from an empty directory")
 	ErrOldRaftLog     = errors.New("replica: the raft directory was written by hashicorp/raft (CasketDB v0.9 or older), start the node from an empty directory")
+	ErrUnconfirmed    = errors.New("replica: no leader confirmed the read, retry")
 )
+
+type ReadMode int
+
+const (
+	ReadLocal ReadMode = iota
+	ReadLinearizable
+	ReadLease
+)
+
+func ParseReadMode(s string) (ReadMode, error) {
+	switch s {
+	case "local":
+		return ReadLocal, nil
+	case "linearizable":
+		return ReadLinearizable, nil
+	case "lease":
+		return ReadLease, nil
+	}
+	return 0, fmt.Errorf("replica: unknown read mode %q, want local, linearizable or lease", s)
+}
 
 type Config struct {
 	ID            string
@@ -32,6 +53,8 @@ type Config struct {
 	LogOutput     io.Writer
 	UnsafeNoFsync bool
 	TLS           *tls.Config
+	Reads         ReadMode
+	MaxClockDrift float64
 }
 
 type Status struct {
@@ -50,6 +73,9 @@ type Node struct {
 	flushMu sync.RWMutex
 	mu      sync.Mutex
 	ready   uint64
+
+	reads       ReadMode
+	readTimeout time.Duration
 
 	wg sync.WaitGroup
 }
@@ -106,6 +132,8 @@ func open(db *bitcask.DB, cfg Config, tune func(*node.Config)) (*Node, error) {
 		HeartbeatTicks:  10,
 		PreVote:         true,
 		CheckQuorum:     true,
+		LeaseReads:      cfg.Reads == ReadLease,
+		MaxClockDrift:   cfg.MaxClockDrift,
 		NoSync:          cfg.UnsafeNoFsync,
 		CompactEntries:  1 << 16,
 		TrailingEntries: 1 << 16,
@@ -118,7 +146,7 @@ func open(db *bitcask.DB, cfg Config, tune func(*node.Config)) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	n := &Node{db: db, id: nc.ID, rn: rn, fsm: fsm}
+	n := &Node{db: db, id: nc.ID, rn: rn, fsm: fsm, reads: cfg.Reads, readTimeout: 2 * time.Duration(nc.ElectionTicks) * nc.TickInterval}
 	n.wg.Add(1)
 	go n.watch()
 	return n, nil
@@ -192,6 +220,22 @@ func (n *Node) Flush() error {
 func (n *Node) wait(p node.Proposal) error {
 	if err := n.rn.Wait(context.Background(), p); err != nil {
 		return ErrLeadershipLost
+	}
+	return nil
+}
+
+func (n *Node) ReadBarrier() error {
+	if n.reads == ReadLocal {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), n.readTimeout)
+	defer cancel()
+	index, err := n.rn.ReadIndex(ctx)
+	if err == nil {
+		err = n.rn.WaitApplied(ctx, index)
+	}
+	if err != nil {
+		return ErrUnconfirmed
 	}
 	return nil
 }

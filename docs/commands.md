@@ -59,6 +59,8 @@ Expiry is exact to the millisecond. Keys expire lazily on access and actively in
 
 In a cluster only the leader accepts writes. Followers answer `-READONLY You can't write against a read only replica.`, as a Redis replica does. There is no Redis Cluster protocol (`CLUSTER`, `MOVED`, `ASK`): every node holds all keys.
 
+With consistent reads turned on, a read that no leader could confirm returns `-TRYAGAIN No leader confirmed the read, retry.` The read had no effect, so retrying is safe. See [consistent reads](replication.md#consistent-reads).
+
 ## Limits
 
 | Limit | Value |

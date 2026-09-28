@@ -6,7 +6,7 @@ A CasketDB cluster is 3 or 5 nodes that hold the same data and agree on every wr
 
 - **A write is acknowledged only after a majority of nodes has it in the Raft log** and the leader has applied it. If the leader fails, the new leader has every acknowledged write. Redis replication, by contrast, is asynchronous and can lose acknowledged writes on failover.
 - **Writes go to the leader only.** Followers answer `-READONLY You can't write against a read only replica.`
-- **Reads are served by every node and may be stale.** A follower, or a leader that has just lost its leadership, can return data that is behind the latest write. Reads never see uncommitted data.
+- **Every node serves reads.** By default a read may be stale: a follower, or a leader that has just lost its leadership, can return data that is behind the latest write. With `-raft-reads linearizable` or `lease`, a read reflects every write acknowledged before it started; see [consistent reads](#consistent-reads). Reads never see uncommitted data.
 - **A cluster of 3 survives one failed node, a cluster of 5 survives two.**
 
 ## Starting a cluster
@@ -46,6 +46,26 @@ Reads see only committed values.
 - On a leadership change, proposed values are dropped. Writes that were waiting get `ERR replica: write interrupted by a leadership change, it may or may not be applied`: the write may or may not have been committed, as in any consensus system. Retry it if it is idempotent, or read the key to check.
 
 `FLUSHDB` also goes through Raft. It waits for all started writes to finish first.
+
+## Consistent reads
+
+`-raft-reads` sets how a node answers read commands — GET, MGET, EXISTS, TTL, KEYS, SCAN and the others, and EXEC of a transaction without writes. Writes always go through Raft and are not affected.
+
+| Mode | How a read works | Guarantee |
+| --- | --- | --- |
+| `local` (default) | The node reads its own data | May be stale |
+| `linearizable` | The node asks the leader for its commit index. The leader confirms that it is still the leader with one heartbeat round to a majority, concurrent reads sharing the round. The node waits until it has applied that index, then reads its own data | Linearizable: the read sees every write acknowledged before it started |
+| `lease` | Like `linearizable`, but the leader answers from its lease without a heartbeat round. Followers still ask the leader | Linearizable as long as node clocks run at rates that differ by at most `-raft-max-clock-drift` |
+
+A consistent read works on any node: a follower forwards the question to the leader and then reads its own data, so followers take read load off the leader. It never sees the proposed values of writes still in flight, only the state up to the confirmed commit index.
+
+If no leader confirms the read within two election timeouts (2 s by default), the node answers `-TRYAGAIN No leader confirmed the read, retry.` Retrying is always safe. A node cut off from the majority, including a leader that has been deposed and does not know it yet, refuses consistent reads instead of answering with stale data.
+
+### Lease reads
+
+After a leader hears from a majority, no other node can win an election for at least an election timeout. The leader uses a slightly shorter period as a lease: (election timeout − 2 ticks) / (1 + drift), about 0.89 s by default. While the lease holds, it answers reads without a network round.
+
+The lease measures time with each node's own clock. It stays correct as long as clock rates differ by at most `-raft-max-clock-drift` (0.1, that is 10%, by default); the absolute time and NTP steps do not matter. A leader process that was paused, by a long garbage-collection pause or a VM migration, counts the time it missed before answering. Use `linearizable` when you cannot bound clock rate differences, for example on overcommitted virtual machines.
 
 ## Durable index and log compaction
 
@@ -91,6 +111,5 @@ Each node expires keys by its own clock. On a follower, a key can stay visible f
 
 - Membership is fixed at start by `-raft-peers`; nodes cannot be added or removed at runtime.
 - The Raft transport has no authentication or encryption. The library supports TLS, but CasketDB has no flags for it yet. Run the cluster on a trusted network.
-- There are no linearizable reads.
 
 More in [limitations](limitations.md).

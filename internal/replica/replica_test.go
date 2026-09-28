@@ -27,6 +27,8 @@ type testNode struct {
 	db     *bitcask.DB
 	node   *Node
 	unsafe bool
+	reads  ReadMode
+	tune   func(*node.Config)
 }
 
 var tuning = testTuning
@@ -46,7 +48,12 @@ func (tn *testNode) start(t testing.TB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := open(db, Config{ID: tn.id, Peers: tn.peers, Dir: filepath.Join(tn.dir, "raft"), UnsafeNoFsync: tn.unsafe}, tuning)
+	n, err := open(db, Config{ID: tn.id, Peers: tn.peers, Dir: filepath.Join(tn.dir, "raft"), UnsafeNoFsync: tn.unsafe, Reads: tn.reads}, func(c *node.Config) {
+		tuning(c)
+		if tn.tune != nil {
+			tn.tune(c)
+		}
+	})
 	if err != nil {
 		db.Close()
 		t.Fatal(err)
@@ -68,13 +75,16 @@ func (tn *testNode) stop(t testing.TB) {
 	tn.node = nil
 }
 
-func newCluster(t testing.TB, size int, unsafe bool) []*testNode {
+func newCluster(t testing.TB, size int, unsafe bool, setup ...func(*testNode)) []*testNode {
 	peers := make(map[string]string)
 	nodes := make([]*testNode, size)
 	for i := range nodes {
 		id := "n" + strconv.Itoa(i)
 		peers[id] = freeAddr(t)
 		nodes[i] = &testNode{id: id, dir: t.TempDir(), peers: peers, unsafe: unsafe}
+		for _, fn := range setup {
+			fn(nodes[i])
+		}
 	}
 	for _, tn := range nodes {
 		tn.start(t)

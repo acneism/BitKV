@@ -4,6 +4,10 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 
 ## Unreleased
 
+### Added
+
+- Consistent reads: `-raft-reads linearizable` confirms every read with the leader, so it sees every write acknowledged before it started, on any node. `-raft-reads lease` lets the leader answer from its lease without a network round, assuming clock rates differ by at most `-raft-max-clock-drift`. A read that no leader confirms returns `TRYAGAIN`.
+
 ### Changed
 
 - Replication runs on github.com/acneism/raft v0.3.1. Nodes now negotiate the wire protocol version, so later upgrades can roll through the cluster one node at a time.

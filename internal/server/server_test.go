@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,7 +15,20 @@ import (
 
 	"github.com/acneism/casketdb/internal/bitcask"
 	"github.com/acneism/casketdb/internal/clock"
+	"github.com/acneism/casketdb/internal/replica"
 )
+
+func TestReplicaErrorsUseRedisCodes(t *testing.T) {
+	for err, prefix := range map[error]string{
+		replica.ErrNotLeader:   "READONLY ",
+		replica.ErrUnconfirmed: "TRYAGAIN ",
+		errors.New("disk"):     "ERR ",
+	} {
+		if got := string(storageError(fmt.Errorf("op: %w", err))); !strings.HasPrefix(got, prefix) {
+			t.Fatalf("%v maps to %q, want prefix %q", err, got, prefix)
+		}
+	}
+}
 
 var testClock = clock.NewManual(time.Now())
 
