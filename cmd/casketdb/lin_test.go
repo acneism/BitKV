@@ -250,6 +250,7 @@ func (h *harness) linearizability(d time.Duration, nemesis func(until time.Time)
 	wg.Wait()
 
 	final := int(clients.Add(1) - 1)
+	finalStart := time.Now()
 	for k := range keys {
 		in := kvInput{op: 'g', key: fmt.Sprintf("k%d", k)}
 		for {
@@ -259,8 +260,13 @@ func (h *harness) linearizability(d time.Duration, nemesis func(until time.Time)
 				record(porcupine.Operation{ClientId: final, Input: in, Call: call, Output: out, Return: now()})
 				break
 			}
-			if time.Since(deadline) > time.Minute {
-				t.Fatalf("the cluster did not answer reads after the faults stopped; logs in %s", h.dir)
+			if time.Since(finalStart) > time.Minute {
+				for _, p := range h.live() {
+					info := h.replication(p.client)
+					t.Logf("%s running=%v state=%s leader=%s membership=%s applied=%s", p.id, p.cmd != nil,
+						info["raft_state"], info["raft_leader_id"], info["raft_membership"], info["raft_applied_index"])
+				}
+				t.Fatalf("the cluster did not answer reads within a minute after the faults stopped; logs in %s", h.dir)
 			}
 			time.Sleep(20 * time.Millisecond)
 		}

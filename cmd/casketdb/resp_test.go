@@ -83,11 +83,15 @@ func (p *respPool) close() {
 }
 
 func (p *respPool) do(addr string, cmds ...[]string) ([]any, error) {
+	return p.doWithin(addr, 5*time.Second, cmds...)
+}
+
+func (p *respPool) doWithin(addr string, timeout time.Duration, cmds ...[]string) ([]any, error) {
 	c, err := p.get(addr)
 	if err != nil {
 		return nil, err
 	}
-	c.SetDeadline(time.Now().Add(5 * time.Second))
+	c.SetDeadline(time.Now().Add(timeout))
 	var b strings.Builder
 	for _, args := range cmds {
 		fmt.Fprintf(&b, "*%d\r\n", len(args))
@@ -111,7 +115,11 @@ func (p *respPool) do(addr string, cmds ...[]string) ([]any, error) {
 }
 
 func (p *respPool) one(addr string, args ...string) (any, error) {
-	replies, err := p.do(addr, args)
+	return p.oneWithin(addr, 5*time.Second, args...)
+}
+
+func (p *respPool) oneWithin(addr string, timeout time.Duration, args ...string) (any, error) {
+	replies, err := p.doWithin(addr, timeout, args)
 	if err != nil {
 		return nil, err
 	}

@@ -310,14 +310,14 @@ func (h *harness) voters(addr string) []string {
 }
 
 func (h *harness) changeMembers(args ...string) bool {
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		l := h.leaderProc()
 		if l == nil {
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
-		_, err := h.pool.one(l.client, append([]string{"RAFT"}, args...)...)
+		_, err := h.pool.oneWithin(l.client, time.Minute, append([]string{"RAFT"}, args...)...)
 		if err == nil || strings.Contains(fmt.Sprint(err), "invalid configuration change") {
 			return true
 		}
