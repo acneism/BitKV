@@ -29,7 +29,6 @@ These are deliberate choices, not missing features:
 | No online backup | A backup command built on the hard-link snapshots |
 | Snapshots hold hard links, so disk space of files deleted by merge is freed only when the snapshot is dropped | Keep one snapshot, or align merges with snapshots |
 | Clients find the leader themselves, from `INFO replication` or a `READONLY` reply | Proxy writes to the leader, or reply with its address |
-| The Raft transport has no authentication or encryption; the library supports TLS, but CasketDB has no flags for it | Certificate flags for mTLS between nodes |
 | Each node expires keys by its own clock | NTP; if needed, expiry as Raft entries from the leader |
 | An existing single-node database cannot join a cluster | Import through a snapshot when the cluster starts |
 | With `-appendfsync no`, a node may refuse to start after a power loss, because the Raft log was compacted past the surviving data | Start the node from an empty directory; or fsync data before compacting the Raft log |

@@ -9,6 +9,7 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 - Consistent reads: `-raft-reads linearizable` confirms every read with the leader, so it sees every write acknowledged before it started, on any node. `-raft-reads lease` lets the leader answer from its lease without a network round, assuming clock rates differ by at most `-raft-max-clock-drift`. A read that no leader confirms returns `TRYAGAIN`.
 - `RAFT TRANSFER [id]` hands leadership over to another voter before the leader is stopped for maintenance.
 - Membership changes at runtime: start a node with `-raft-join`, then `RAFT ADDLEARNER`, `RAFT PROMOTE` and `RAFT REMOVE` on the leader. `RAFT MEMBERS` lists the members; `INFO replication` shows `raft_membership`, `raft_voters` and `raft_learners`.
+- Mutual TLS between nodes with `-raft-tls-cert`, `-raft-tls-key` and `-raft-tls-ca`. A node must present a certificate for its own id; the server checks its certificate at start and warns when Raft runs without TLS on a non-loopback address.
 
 ### Changed
 

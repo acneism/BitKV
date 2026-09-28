@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"errors"
 	"flag"
 	"log/slog"
@@ -30,6 +31,9 @@ type config struct {
 	raftReads   string
 	raftDrift   float64
 	raftJoin    bool
+	raftCert    string
+	raftKey     string
+	raftCA      string
 	opts        bitcask.Options
 }
 
@@ -51,7 +55,10 @@ func main() {
 	flag.BoolVar(&cfg.raftNoFsync, "raft-unsafe-no-fsync", false, "skip fsync of the raft log: faster, but a power loss on one node followed by a leader failure can lose acknowledged writes")
 	flag.StringVar(&cfg.raftReads, "raft-reads", "local", "read consistency in a cluster: local (may be stale), linearizable (confirmed by the leader) or lease (the leader answers from its lease)")
 	flag.Float64Var(&cfg.raftDrift, "raft-max-clock-drift", 0.1, "largest relative difference between node clock rates that -raft-reads lease tolerates")
-	flag.BoolVar(&cfg.raftJoin, "raft-join", false, "join a running cluster: -raft-peers lists this node and the members it can reach; add it on the leader with RAFT ADDLEARNER")
+	flag.BoolVar(&cfg.raftJoin, "raft-join", false, "join a running cluster: -raft-peers lists this node and every current member; add it on the leader with RAFT ADDLEARNER")
+	flag.StringVar(&cfg.raftCert, "raft-tls-cert", "", "PEM certificate of this node for mutual TLS between nodes; its DNS name must be the node id")
+	flag.StringVar(&cfg.raftKey, "raft-tls-key", "", "PEM private key for -raft-tls-cert")
+	flag.StringVar(&cfg.raftCA, "raft-tls-ca", "", "PEM certificates of the CA that signs node certificates")
 	flag.Parse()
 	if cfg.requirePass == "" {
 		cfg.requirePass = os.Getenv("CASKETDB_REQUIREPASS")
@@ -94,6 +101,9 @@ func run(logger *slog.Logger, cfg config) error {
 		if cfg.raftNoFsync {
 			logger.Warn("raft log fsync is disabled (-raft-unsafe-no-fsync): a power loss can lose acknowledged writes")
 		}
+		if cfg.raftCert == "" && !loopbackPeer(cfg.raftPeers, cfg.raftID) {
+			logger.Warn("raft traffic between nodes is not encrypted or authenticated; set -raft-tls-cert, -raft-tls-key and -raft-tls-ca")
+		}
 	}
 
 	ln, err := net.Listen("tcp", cfg.addr)
@@ -135,6 +145,19 @@ func isLoopback(addr net.Addr) bool {
 	return ok && tcp.IP.IsLoopback()
 }
 
+func loopbackPeer(peers, id string) bool {
+	parsed, err := replica.ParsePeers(peers)
+	if err != nil {
+		return false
+	}
+	host, _, err := net.SplitHostPort(parsed[id])
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return host == "localhost" || ip != nil && ip.IsLoopback()
+}
+
 func warnIfShared(logger *slog.Logger, dir string) {
 	if runtime.GOOS == "windows" {
 		return
@@ -153,12 +176,22 @@ func openReplica(cfg config, db *bitcask.DB) (*replica.Node, error) {
 	if err != nil {
 		return nil, err
 	}
+	var tlsConfig *tls.Config
+	switch {
+	case cfg.raftCert != "" && cfg.raftKey != "" && cfg.raftCA != "":
+		if tlsConfig, err = replica.TLSConfig(cfg.raftID, cfg.raftCert, cfg.raftKey, cfg.raftCA); err != nil {
+			return nil, err
+		}
+	case cfg.raftCert != "" || cfg.raftKey != "" || cfg.raftCA != "":
+		return nil, errors.New("-raft-tls-cert, -raft-tls-key and -raft-tls-ca go together")
+	}
 	return replica.Open(db, replica.Config{
 		ID:            cfg.raftID,
 		Peers:         peers,
 		Dir:           cfg.raftDir,
 		LogOutput:     os.Stderr,
 		UnsafeNoFsync: cfg.raftNoFsync,
+		TLS:           tlsConfig,
 		Reads:         reads,
 		MaxClockDrift: cfg.raftDrift,
 		Join:          cfg.raftJoin,

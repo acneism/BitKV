@@ -1,6 +1,7 @@
 package replica
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -29,6 +30,7 @@ type testNode struct {
 	unsafe bool
 	reads  ReadMode
 	join   bool
+	tls    *tls.Config
 	tune   func(*node.Config)
 }
 
@@ -49,7 +51,7 @@ func (tn *testNode) start(t testing.TB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := open(db, Config{ID: tn.id, Peers: tn.peers, Dir: filepath.Join(tn.dir, "raft"), UnsafeNoFsync: tn.unsafe, Reads: tn.reads, Join: tn.join}, func(c *node.Config) {
+	n, err := open(db, Config{ID: tn.id, Peers: tn.peers, Dir: filepath.Join(tn.dir, "raft"), UnsafeNoFsync: tn.unsafe, TLS: tn.tls, Reads: tn.reads, Join: tn.join}, func(c *node.Config) {
 		tuning(c)
 		if tn.tune != nil {
 			tn.tune(c)

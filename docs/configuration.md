@@ -18,6 +18,9 @@ CasketDB is configured with command-line flags. There is no configuration file a
 | `-proto-max-bulk-len` | 512 MB | Largest bulk string a client may send |
 | `-raft-id` | empty | Node id in the cluster. Setting it turns replication on |
 | `-raft-peers` | empty | All cluster nodes including this one: `id=host:port,…`, the same on every node. Used only when the cluster is created and when a node joins; later the membership comes from the Raft log |
+| `-raft-tls-cert` | empty | PEM certificate of this node for mutual TLS between nodes; its first DNS name must be the node id. Set together with `-raft-tls-key` and `-raft-tls-ca`, see [mutual TLS](replication.md#mutual-tls-between-nodes) |
+| `-raft-tls-key` | empty | PEM private key of `-raft-tls-cert` |
+| `-raft-tls-ca` | empty | PEM certificates of the CA that signs node certificates |
 | `-raft-join` | `false` | Join a running cluster instead of creating one. `-raft-peers` lists this node and every current member; see [changing membership](replication.md#changing-membership) |
 | `-raft-dir` | `<dir>/raft` | Raft log and snapshots |
 | `-raft-unsafe-no-fsync` | `false` | Do not fsync the Raft log. Faster, but see [replication](replication.md#running-without-fsync) |

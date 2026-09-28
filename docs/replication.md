@@ -151,6 +151,36 @@ raft/
 
 A Raft directory written by hashicorp/raft (CasketDB v0.9 and older, then named BitKV) is rejected at start. See the [changelog](../CHANGELOG.md#upgrading-from-v09).
 
+## Mutual TLS between nodes
+
+Without TLS, Raft traffic between nodes travels in plain text and a node accepts any peer that connects to its Raft port; the server logs a warning when its Raft address is not a loopback address. With mutual TLS, every connection is encrypted with TLS 1.3 and both sides present a certificate signed by the cluster's CA. The id a node claims must match its certificate, so a node cannot pose as another member.
+
+```bash
+casketdb -dir data -raft-id n1 -raft-peers n1=10.0.0.1:7000,n2=10.0.0.2:7000,n3=10.0.0.3:7000 \
+  -raft-tls-cert n1.crt -raft-tls-key n1.key -raft-tls-ca ca.crt
+```
+
+A node certificate must:
+
+- carry the node id as its first DNS name (subject alternative name), for example `DNS:n1`;
+- allow both server and client authentication, since each node both accepts and opens connections;
+- be signed by a CA in the `-raft-tls-ca` file.
+
+CasketDB checks the certificate at start and refuses to run with one that does not fit, for example a certificate issued for another node. A CA and a node certificate can be made with OpenSSL:
+
+```bash
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
+  -subj "/CN=casketdb-ca" -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" -keyout ca.key -out ca.crt
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -subj "/CN=n1" -keyout n1.key -out n1.csr
+printf "subjectAltName=DNS:n1\nextendedKeyUsage=serverAuth,clientAuth\n" > n1.ext
+openssl x509 -req -in n1.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 825 -extfile n1.ext -out n1.crt
+```
+
+All nodes of a cluster use TLS or none does: a node without TLS, or with a certificate from another CA, cannot talk to the others. To turn TLS on in a running cluster, restart all nodes with the flags. A certificate is read at start, so renewing it means restarting the node. To move to a new CA, first put both CAs into every node's `-raft-tls-ca` file and restart the nodes one by one, then switch the node certificates.
+
+TLS covers only traffic between nodes. Client connections are not encrypted yet; see [SECURITY.md](../SECURITY.md#security-model).
+
 ## Upgrades
 
 Nodes negotiate the version of the protocol they speak to each other, so a release that keeps the protocol compatible can be rolled through the cluster one node at a time. The [changelog](../CHANGELOG.md) says when a release breaks compatibility and all nodes have to be upgraded together, as the move from v0.10 does.
@@ -165,6 +195,4 @@ Each node expires keys by its own clock. On a follower, a key can stay visible f
 
 ## Limitations
 
-- The Raft transport has no authentication or encryption. The library supports TLS, but CasketDB has no flags for it yet. Run the cluster on a trusted network.
-
-More in [limitations](limitations.md).
+What clusters cannot do yet, such as sharding across nodes, is listed in [limitations](limitations.md).
