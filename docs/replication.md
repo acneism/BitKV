@@ -17,7 +17,9 @@ Start every node with the same `-raft-peers` and empty directories. The initial 
 casketdb -addr 10.0.0.1:6379 -dir data -raft-id n1 -raft-peers n1=10.0.0.1:7000,n2=10.0.0.2:7000,n3=10.0.0.3:7000
 ```
 
-The address in `-raft-peers` is where that node's Raft transport listens; `-addr` is where clients connect.
+The address in `-raft-peers` is how the other nodes reach that node's Raft transport; the node listens on it too, unless `-raft-listen` gives another address, for example behind NAT or in a container. `-addr` is where clients connect.
+
+A failed leader is replaced after an election timeout, 1 s by default. `-raft-election-timeout` changes it; heartbeats go ten times as often. A lower value speeds up failover on a fast network, a higher one avoids needless elections across slow links.
 
 A node whose data directory holds keys but has no Raft state refuses to start: joining it would make the nodes diverge. To turn an existing single-node database into a cluster, start the cluster empty and load the data through a client.
 

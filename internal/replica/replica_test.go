@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -437,6 +438,16 @@ func TestRefusesHashicorpRaftDir(t *testing.T) {
 			t.Fatalf("open over %s: %v, want ErrOldRaftLog", name, err)
 		}
 		must(t, db.Close())
+	}
+}
+
+func TestRejectsShortElectionTimeout(t *testing.T) {
+	db, err := bitcask.Open(filepath.Join(t.TempDir(), "data"), bitcask.DefaultOptions())
+	must(t, err)
+	defer db.Close()
+	cfg := Config{ID: "n0", Peers: map[string]string{"n0": freeAddr(t)}, Dir: filepath.Join(t.TempDir(), "raft"), ElectionTimeout: 50 * time.Millisecond}
+	if _, err := Open(db, cfg); err == nil || !strings.Contains(err.Error(), "at least 100ms") {
+		t.Fatalf("open with a 50ms election timeout: %v", err)
 	}
 }
 

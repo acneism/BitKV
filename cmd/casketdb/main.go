@@ -34,6 +34,8 @@ type config struct {
 	raftCert    string
 	raftKey     string
 	raftCA      string
+	raftListen  string
+	raftTimeout time.Duration
 	opts        bitcask.Options
 }
 
@@ -52,6 +54,8 @@ func main() {
 	flag.StringVar(&cfg.raftID, "raft-id", "", "raft node id; enables replication")
 	flag.StringVar(&cfg.raftPeers, "raft-peers", "", "all raft nodes including this one: id=host:port,id=host:port")
 	flag.StringVar(&cfg.raftDir, "raft-dir", "", "raft log and snapshot directory (default <dir>/raft)")
+	flag.StringVar(&cfg.raftListen, "raft-listen", "", "address the raft transport listens on when it differs from this node's address in -raft-peers, for example behind NAT")
+	flag.DurationVar(&cfg.raftTimeout, "raft-election-timeout", time.Second, "time without a leader before a node starts an election; heartbeats go 10 times as often")
 	flag.BoolVar(&cfg.raftNoFsync, "raft-unsafe-no-fsync", false, "skip fsync of the raft log: faster, but a power loss on one node followed by a leader failure can lose acknowledged writes")
 	flag.StringVar(&cfg.raftReads, "raft-reads", "local", "read consistency in a cluster: local (may be stale), linearizable (confirmed by the leader) or lease (the leader answers from its lease)")
 	flag.Float64Var(&cfg.raftDrift, "raft-max-clock-drift", 0.1, "largest relative difference between node clock rates that -raft-reads lease tolerates")
@@ -186,15 +190,17 @@ func openReplica(cfg config, db *bitcask.DB) (*replica.Node, error) {
 		return nil, errors.New("-raft-tls-cert, -raft-tls-key and -raft-tls-ca go together")
 	}
 	return replica.Open(db, replica.Config{
-		ID:            cfg.raftID,
-		Peers:         peers,
-		Dir:           cfg.raftDir,
-		LogOutput:     os.Stderr,
-		UnsafeNoFsync: cfg.raftNoFsync,
-		TLS:           tlsConfig,
-		Reads:         reads,
-		MaxClockDrift: cfg.raftDrift,
-		Join:          cfg.raftJoin,
+		ID:              cfg.raftID,
+		Peers:           peers,
+		Listen:          cfg.raftListen,
+		Dir:             cfg.raftDir,
+		LogOutput:       os.Stderr,
+		UnsafeNoFsync:   cfg.raftNoFsync,
+		TLS:             tlsConfig,
+		Reads:           reads,
+		MaxClockDrift:   cfg.raftDrift,
+		Join:            cfg.raftJoin,
+		ElectionTimeout: cfg.raftTimeout,
 	})
 }
 

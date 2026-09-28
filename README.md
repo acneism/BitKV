@@ -9,7 +9,7 @@ CasketDB is a Redis-compatible key-value store written in Go. It keeps values on
 
 Any Redis client — `redis-cli`, `redis-benchmark`, go-redis, redis-py — works with CasketDB unchanged, within the [supported commands](docs/commands.md).
 
-> **Status: early.** CasketDB v0.10 is covered by unit, model, fuzz and cluster fault tests, but it has not run in production yet. It supports string commands only. Read [limitations](docs/limitations.md) before relying on it.
+> **Status: early.** CasketDB is covered by unit, model and fuzz tests and by fault-injection tests that check linearizability under `kill -9`, network partitions and membership changes, but it has not run in production yet. It supports string commands only. Read [limitations](docs/limitations.md) before relying on it.
 >
 > The project was called BitKV until 2026-09-28.
 
@@ -30,7 +30,7 @@ Any Redis client — `redis-cli`, `redis-benchmark`, go-redis, redis-py — work
 - **All cores.** 1024 lock shards instead of a single command thread, and four parallel logs with group commit.
 - **No lost acknowledged writes in a cluster.** With 3 or 5 nodes, a write is acknowledged only after a majority has it in the Raft log. Redis replication is asynchronous; CasketDB's is not.
 - **Familiar durability.** `appendfsync always | everysec | no` with Redis semantics. An acknowledged write survives `kill -9` in every mode and a power loss according to the fsync policy.
-- **Small and dependency-light.** One binary. The only external dependency is the Raft library [github.com/acneism/raft](https://github.com/acneism/raft).
+- **Small and dependency-light.** One binary. The only external dependency of the server is the Raft library [github.com/acneism/raft](https://github.com/acneism/raft); the tests also use [Porcupine](https://github.com/anishathalye/porcupine).
 
 ## Quick start
 
@@ -62,7 +62,7 @@ casketdb -addr 10.0.0.2:6379 -dir data -raft-id n2 -raft-peers n1=10.0.0.1:7000,
 casketdb -addr 10.0.0.3:6379 -dir data -raft-id n3 -raft-peers n1=10.0.0.1:7000,n2=10.0.0.2:7000,n3=10.0.0.3:7000
 ```
 
-Only the leader accepts writes; followers answer `-READONLY`. `INFO replication` shows the leader's id and address. Every node serves reads, which may lag behind the leader. Details are in [replication](docs/replication.md).
+Only the leader accepts writes; followers answer `-READONLY`. `INFO replication` shows the leader's id and address. Every node serves reads: by default they may lag behind the leader, and with `-raft-reads linearizable` they reflect every acknowledged write. Nodes can be added and removed at runtime with `RAFT` commands, and talk to each other over mutual TLS with `-raft-tls-*`. Details are in [replication](docs/replication.md).
 
 ## When to use it
 

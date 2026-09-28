@@ -4,7 +4,7 @@ This document is for contributors. It explains how CasketDB is built and what it
 
 ## Packages
 
-The storage engine knows nothing about the network or replication, and the protocol layer knows nothing about commands. Only `internal/replica` has an external dependency; everything else uses the Go standard library.
+The storage engine knows nothing about the network or replication, and the protocol layer knows nothing about commands. Only `internal/replica` has an external dependency, the Raft library; everything else uses the Go standard library. The fault-injection tests in `cmd/casketdb` also use Porcupine.
 
 | Package | Responsibility |
 | --- | --- |
@@ -102,6 +102,7 @@ A record in a `.hint` file is crc (4) + expireAt (8) + offset (8) + keyLen (4) +
 - A model test: 20,000 random operations with merges and reopenings compared against a map.
 - Crash tests: torn tails, cut batches, interrupted merges and flushes, and disk images of a database after `kill -9`, power loss and loss of one log's unsynced tail.
 - A fuzz test of the RESP reader.
-- Cluster tests with 3 nodes in one process over TCP: concurrent writes, failover under load on a hot key, log compaction, tail replay after restart, catch-up by snapshot and interrupted restores.
+- Cluster tests with 3 nodes in one process over TCP: concurrent writes, failover under load on a hot key, log compaction, tail replay after restart, catch-up by snapshot and interrupted restores, consistent reads, leadership transfer, membership changes and mutual TLS.
+- Fault-injection tests in `cmd/casketdb` that run real server processes under `kill -9`, network partitions, leadership transfers and membership changes, and check the RESP client history for linearizability with Porcupine. See [CONTRIBUTING](../CONTRIBUTING.md#fault-injection-tests).
 
 Run `go vet ./...` and `go test ./...` on Linux and Windows; run `go test -race ./...` on Linux. See [CONTRIBUTING](../CONTRIBUTING.md).

@@ -48,6 +48,25 @@ GOOS=linux go test -c -o replica.test ./internal/replica
 wsl ./replica.test
 ```
 
+### Fault-injection tests
+
+`cmd/casketdb` holds end-to-end tests that run real `casketdb` processes: three nodes, eight RESP clients doing SET, GET, INCR, DEL and MULTI/EXEC, and a nemesis. They check the recorded history for linearizability with [Porcupine](https://github.com/anishathalye/porcupine). They are skipped unless a duration is given:
+
+```bash
+go test ./cmd/casketdb -run TestFaults -timeout 30m -args -fault.duration=5m
+go test ./cmd/casketdb -run TestMembershipChanges -timeout 30m -args -member.duration=5m
+```
+
+`TestFaults` kills nodes with `kill -9`, cuts network links between nodes in one or both directions through a proxy, and transfers leadership. `TestMembershipChanges` adds nodes with `-raft-join` and removes voters while the load runs. Other flags: `-fault.reads=lease` runs the nodes with lease reads, `-fault.nosync` with `-raft-unsafe-no-fsync`, `-fault.bin` uses a prebuilt binary, `-fault.out` sets where the Porcupine visualization of a failure goes. Node logs stay in the test's temporary directory, printed on failure.
+
+On Linux without a Go toolchain, cross-compile both the server and the test:
+
+```bash
+GOOS=linux go build -o casketdb-linux ./cmd/casketdb
+GOOS=linux go test -c -o fault.test ./cmd/casketdb
+wsl ./fault.test -test.run TestFaults -test.timeout 30m -fault.duration=5m -fault.bin=./casketdb-linux
+```
+
 Benchmarks live next to the code, for example:
 
 ```bash
@@ -61,7 +80,7 @@ Fsync time varies a lot between runs. When you compare two builds, alternate the
 - Code is formatted with `gofmt` and passes `go vet`.
 - **No comments in code, tests included.** Names and structure carry the intent. Build constraints such as `//go:build` are not comments and stay.
 - Match the surrounding code: naming, error handling, test helpers.
-- Packages other than `internal/replica` use only the standard library. Discuss a new dependency in an issue first.
+- Code outside `internal/replica` uses only the standard library; the fault-injection tests also use Porcupine. Discuss a new dependency in an issue first.
 - Everything that knows about Raft stays in `internal/replica`.
 
 ## Tests for a change

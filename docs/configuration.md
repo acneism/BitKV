@@ -23,6 +23,8 @@ CasketDB is configured with command-line flags. There is no configuration file a
 | `-raft-tls-ca` | empty | PEM certificates of the CA that signs node certificates |
 | `-raft-join` | `false` | Join a running cluster instead of creating one. `-raft-peers` lists this node and every current member; see [changing membership](replication.md#changing-membership) |
 | `-raft-dir` | `<dir>/raft` | Raft log and snapshots |
+| `-raft-listen` | the node's address in `-raft-peers` | Address the Raft transport listens on, when it differs from the address other nodes use, for example behind NAT or in a container |
+| `-raft-election-timeout` | `1s` | Time without a leader before a node starts an election, at least 100 ms. Heartbeats go ten times as often. Lower it for faster failover on a fast network, raise it across slow links |
 | `-raft-unsafe-no-fsync` | `false` | Do not fsync the Raft log. Faster, but see [replication](replication.md#running-without-fsync) |
 | `-raft-reads` | `local` | Read consistency in a cluster: `local` (may be stale), `linearizable` or `lease`, see [consistent reads](replication.md#consistent-reads) |
 | `-raft-max-clock-drift` | `0.1` | Largest relative difference between node clock rates that `-raft-reads lease` tolerates |

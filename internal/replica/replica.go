@@ -51,15 +51,17 @@ func ParseReadMode(s string) (ReadMode, error) {
 }
 
 type Config struct {
-	ID            string
-	Peers         map[string]string
-	Dir           string
-	LogOutput     io.Writer
-	UnsafeNoFsync bool
-	TLS           *tls.Config
-	Reads         ReadMode
-	MaxClockDrift float64
-	Join          bool
+	ID              string
+	Peers           map[string]string
+	Listen          string
+	Dir             string
+	LogOutput       io.Writer
+	UnsafeNoFsync   bool
+	TLS             *tls.Config
+	Reads           ReadMode
+	MaxClockDrift   float64
+	Join            bool
+	ElectionTimeout time.Duration
 }
 
 type Status struct {
@@ -117,6 +119,13 @@ func open(db *bitcask.DB, cfg Config, tune func(*node.Config)) (*Node, error) {
 	if _, ok := cfg.Peers[cfg.ID]; !ok {
 		return nil, fmt.Errorf("replica: node %q is not in the peer list", cfg.ID)
 	}
+	const tick = 10 * time.Millisecond
+	electionTicks := 100
+	if cfg.ElectionTimeout > 0 {
+		if electionTicks = int(cfg.ElectionTimeout / tick); electionTicks < 10 {
+			return nil, fmt.Errorf("replica: the election timeout must be at least %v", 10*tick)
+		}
+	}
 	if fileExists(filepath.Join(cfg.Dir, "raft.db")) || fileExists(filepath.Join(cfg.Dir, "wal", "wal-meta.db")) {
 		return nil, ErrOldRaftLog
 	}
@@ -138,13 +147,14 @@ func open(db *bitcask.DB, cfg Config, tune func(*node.Config)) (*Node, error) {
 	nc := node.Config{
 		ID:              raft.NodeID(cfg.ID),
 		Dir:             cfg.Dir,
+		Listen:          cfg.Listen,
 		Peers:           peers,
 		Join:            cfg.Join,
 		TLS:             cfg.TLS,
 		StateMachine:    fsm,
-		TickInterval:    10 * time.Millisecond,
-		ElectionTicks:   100,
-		HeartbeatTicks:  10,
+		TickInterval:    tick,
+		ElectionTicks:   electionTicks,
+		HeartbeatTicks:  electionTicks / 10,
 		PreVote:         true,
 		CheckQuorum:     true,
 		LeaseReads:      cfg.Reads == ReadLease,

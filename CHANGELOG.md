@@ -10,6 +10,8 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 - `RAFT TRANSFER [id]` hands leadership over to another voter before the leader is stopped for maintenance.
 - Membership changes at runtime: start a node with `-raft-join`, then `RAFT ADDLEARNER`, `RAFT PROMOTE` and `RAFT REMOVE` on the leader. `RAFT MEMBERS` lists the members; `INFO replication` shows `raft_membership`, `raft_voters` and `raft_learners`.
 - Mutual TLS between nodes with `-raft-tls-cert`, `-raft-tls-key` and `-raft-tls-ca`. A node must present a certificate for its own id; the server checks its certificate at start and warns when Raft runs without TLS on a non-loopback address.
+- `-raft-listen` sets the Raft listen address when it differs from the node's address in `-raft-peers`; `-raft-election-timeout` sets the election timeout, 1 s by default.
+- Fault-injection tests: real server processes under `kill -9`, network partitions, leadership transfers and membership changes, with the RESP client history checked for linearizability by Porcupine. See [CONTRIBUTING](CONTRIBUTING.md#fault-injection-tests).
 
 ### Changed
 

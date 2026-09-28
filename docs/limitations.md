@@ -33,4 +33,4 @@ These are deliberate choices, not missing features:
 | An existing single-node database cannot join a cluster | Import through a snapshot when the cluster starts |
 | With `-appendfsync no`, a node may refuse to start after a power loss, because the Raft log was compacted past the surviving data | Start the node from an empty directory; or fsync data before compacting the Raft log |
 | Restoring a snapshot on a follower goes through a temporary database: about twice the key index in memory and a full rewrite of the data | Swap data files and rebuild the index in place |
-| No production track record, no end-to-end fault-injection test of the cluster with network partitions and clock skew | A Jepsen-style test with Porcupine, as the Raft library already has |
+| No production track record. The fault-injection tests cover crashes, partitions, leadership transfers and membership changes, but not clock skew or disk faults | Real deployments; clock and disk faults in the fault-injection tests |
