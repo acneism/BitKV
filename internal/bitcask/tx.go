@@ -57,6 +57,7 @@ type Tx struct {
 	shardBuf  [4]int
 	pending   map[string]pendingOp
 	term      uint64
+	depends   uint64
 	order     []string
 	err       error
 }
@@ -139,22 +140,22 @@ type Op struct {
 	Delete   bool
 }
 
-func (db *DB) Propose(scope Scope, term uint64, fn func(tx *Tx) error, publish func(ops []Op) (uint64, error)) error {
+func (db *DB) Propose(scope Scope, term uint64, fn func(tx *Tx) error, publish func(ops []Op) (uint64, error)) (uint64, error) {
 	tx := db.begin(scope, true)
 	defer tx.release()
 	tx.term = term
 	if err := db.stateErr(); err != nil {
-		return err
+		return 0, err
 	}
 	if err := fn(tx); err != nil {
-		return err
+		return tx.depends, err
 	}
 	if tx.err != nil || len(tx.order) == 0 {
-		return tx.err
+		return tx.depends, tx.err
 	}
 	id, err := publish(tx.ops())
 	if err != nil {
-		return err
+		return tx.depends, err
 	}
 	for _, key := range tx.order {
 		s := db.kd.shard(key)
@@ -163,7 +164,7 @@ func (db *DB) Propose(scope Scope, term uint64, fn func(tx *Tx) error, publish f
 		}
 		s.proposed[key] = proposedOp{pendingOp: tx.pending[key], term: term, id: id}
 	}
-	return nil
+	return id, nil
 }
 
 func (db *DB) DropProposed() {
@@ -330,7 +331,11 @@ func (tx *Tx) proposed(s *shard, key string) (proposedOp, bool) {
 		return proposedOp{}, false
 	}
 	op, ok := s.proposed[key]
-	return op, ok && op.term == tx.term
+	if !ok || op.term != tx.term {
+		return proposedOp{}, false
+	}
+	tx.depends = max(tx.depends, op.id)
+	return op, true
 }
 
 func (tx *Tx) Exists(key string) bool {

@@ -8,6 +8,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/acneism/casketdb/internal/bitcask"
+	"github.com/acneism/raft/node"
 )
 
 func leaderOf(nodes []*testNode) *testNode {
@@ -65,6 +68,49 @@ func TestTransferLeadershipErrors(t *testing.T) {
 		t.Fatal("the leader lost its leadership after a failed transfer")
 	}
 	must(t, put(l, "still", "leader"))
+}
+
+func TestNoOpWriteWaitsForTheProposalItRead(t *testing.T) {
+	nodes := newCluster(t, 3, false, func(tn *testNode) {
+		tn.tune = func(c *node.Config) { c.ElectionTicks = 500 }
+	})
+	l := leader(t, nodes)
+	must(t, put(l, "k", "v"))
+	for _, tn := range nodes {
+		if tn != l {
+			tn.stop(t)
+		}
+	}
+	first := make(chan error, 1)
+	go func() {
+		first <- l.node.Update(bitcask.Keys("k"), func(tx *bitcask.Tx) error {
+			tx.Delete("k")
+			return nil
+		})
+	}()
+	eventually(t, "the delete to be proposed", func() bool {
+		gone := false
+		l.db.Propose(bitcask.Keys("k"), l.node.term(), func(tx *bitcask.Tx) error {
+			gone = !tx.Exists("k")
+			return nil
+		}, nil)
+		return gone
+	})
+	existed := true
+	err := l.node.Update(bitcask.Keys("k"), func(tx *bitcask.Tx) error {
+		if existed = tx.Exists("k"); existed {
+			tx.Delete("k")
+		}
+		return nil
+	})
+	if err == nil && !existed {
+		t.Fatal("a write that changed nothing reported the key missing because of a delete that never committed")
+	}
+	for _, err := range []error{err, <-first} {
+		if !errors.Is(err, ErrLeadershipLost) && !errors.Is(err, ErrNotLeader) {
+			t.Fatalf("write without a majority: %v, want ErrLeadershipLost or ErrNotLeader", err)
+		}
+	}
 }
 
 func TestWritesSurviveLeadershipTransfers(t *testing.T) {

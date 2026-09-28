@@ -37,6 +37,8 @@ The leader replicates the effects of a command, not the command. It runs the com
 
 The transaction proposes its operations to Raft while it still holds its key locks, so the order of entries in the log matches the order of dependent writes. It then marks the new values as proposed, releases the locks and waits for the commit without them. The next write to the same key builds on the proposed value and does not wait for the previous Raft round, so a hot key is not limited to one write per round trip.
 
+A write command that ends up changing nothing — DEL or GETDEL of a missing key, SETNX of an existing key, EXPIRE of a missing key — still waits until the proposed values it read are committed before it answers. Its answer never rests on a write that could still be lost.
+
 Reads see only committed values.
 
 ## Leader changes

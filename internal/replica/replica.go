@@ -206,16 +206,17 @@ func (n *Node) Update(scope bitcask.Scope, fn func(tx *bitcask.Tx) error) error 
 	if term == 0 {
 		return ErrNotLeader
 	}
-	var p node.Proposal
-	err := n.db.Propose(scope, term, fn, func(ops []bitcask.Op) (uint64, error) {
-		var err error
-		p, err = n.propose(term, encodeEntry(kindOps, ops))
+	index, err := n.db.Propose(scope, term, fn, func(ops []bitcask.Op) (uint64, error) {
+		p, err := n.propose(term, encodeEntry(kindOps, ops))
 		return p.Index, err
 	})
-	if err != nil || p.Index == 0 {
+	if index == 0 || errors.Is(err, ErrNotLeader) || errors.Is(err, ErrLeadershipLost) {
 		return err
 	}
-	return n.wait(p)
+	if werr := n.wait(node.Proposal{Index: index, Term: term}); werr != nil {
+		return werr
+	}
+	return err
 }
 
 func (n *Node) Flush() error {

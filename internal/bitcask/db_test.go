@@ -1152,15 +1152,16 @@ func TestProposedWritesVisibility(t *testing.T) {
 	db := mustOpen(t, t.TempDir(), testOptions())
 	defer mustClose(t, db)
 	var published [][]Op
-	propose := func(term uint64, fn func(tx *Tx) error) {
+	propose := func(term uint64, fn func(tx *Tx) error) uint64 {
 		t.Helper()
-		err := db.Propose(Keys("k"), term, fn, func(ops []Op) (uint64, error) {
+		index, err := db.Propose(Keys("k"), term, fn, func(ops []Op) (uint64, error) {
 			published = append(published, ops)
 			return uint64(len(published)), nil
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
+		return index
 	}
 	incr := func(tx *Tx) error {
 		v, _, err := tx.Get("k")
@@ -1202,5 +1203,43 @@ func TestProposedWritesVisibility(t *testing.T) {
 	db.DropProposed()
 	if got := seen(7); got != "xx" {
 		t.Fatalf("after drop same term sees %q, want committed xx", got)
+	}
+}
+
+func TestProposeReportsWhatTheOutcomeDependsOn(t *testing.T) {
+	db := mustOpen(t, t.TempDir(), testOptions())
+	defer mustClose(t, db)
+	next := uint64(10)
+	propose := func(term uint64, fn func(tx *Tx) error) (uint64, error) {
+		return db.Propose(Keys("k"), term, fn, func([]Op) (uint64, error) {
+			next++
+			return next, nil
+		})
+	}
+	read := func(tx *Tx) error {
+		tx.Exists("k")
+		return nil
+	}
+	if index, err := propose(7, read); err != nil || index != 0 {
+		t.Fatalf("a read of committed state depends on %d, %v; want 0", index, err)
+	}
+	if index, _ := propose(7, func(tx *Tx) error { tx.Put("k", []byte("v"), 0); return nil }); index != 11 {
+		t.Fatalf("a published write depends on %d, want its own proposal 11", index)
+	}
+	if index, err := propose(7, read); err != nil || index != 11 {
+		t.Fatalf("a no-op write after a proposal depends on %d, %v; want 11", index, err)
+	}
+	failed := errors.New("wrong type")
+	if index, err := propose(7, func(tx *Tx) error { tx.Get("k"); return failed }); err != failed || index != 11 {
+		t.Fatalf("a failed write that read a proposal depends on %d, %v; want 11", index, err)
+	}
+	if index, _ := propose(8, read); index != 0 {
+		t.Fatalf("a writer of another term depends on %d, want 0", index)
+	}
+	if err := db.Apply([]Op{{Key: "k", Value: []byte("v")}}, 11); err != nil {
+		t.Fatal(err)
+	}
+	if index, _ := propose(7, read); index != 0 {
+		t.Fatalf("after the proposal is applied a no-op write depends on %d, want 0", index)
 	}
 }

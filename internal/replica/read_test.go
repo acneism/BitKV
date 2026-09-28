@@ -85,10 +85,11 @@ func TestConsistentReadsSkipProposedValues(t *testing.T) {
 		nodes := newCluster(t, 3, false, withReads(mode))
 		l := leader(t, nodes)
 		must(t, put(l, "k", "committed"))
-		must(t, l.db.Propose(bitcask.Keys("k"), l.node.term(), func(tx *bitcask.Tx) error {
+		_, err := l.db.Propose(bitcask.Keys("k"), l.node.term(), func(tx *bitcask.Tx) error {
 			tx.Put("k", []byte("proposed"), 0)
 			return nil
-		}, func([]bitcask.Op) (uint64, error) { return 1 << 62, nil }))
+		}, func([]bitcask.Op) (uint64, error) { return 1 << 62, nil })
+		must(t, err)
 		var seen string
 		must(t, l.node.Update(bitcask.Keys("k", "other"), func(tx *bitcask.Tx) error {
 			v, _, err := tx.Get("k")
