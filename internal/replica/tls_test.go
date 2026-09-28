@@ -37,8 +37,8 @@ func newTestCA(t *testing.T, name string) *testCA {
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: name},
-		NotBefore:             now.Add(-time.Hour),
-		NotAfter:              now.Add(time.Hour),
+		NotBefore:             now.Add(-24 * time.Hour),
+		NotAfter:              now.Add(24 * time.Hour),
 		IsCA:                  true,
 		KeyUsage:              x509.KeyUsageCertSign,
 		BasicConstraintsValid: true,
@@ -62,8 +62,8 @@ func (ca *testCA) issue(t *testing.T, cn string, dns []string, usage []x509.ExtK
 		SerialNumber: big.NewInt(ca.next),
 		Subject:      pkix.Name{CommonName: cn},
 		DNSNames:     dns,
-		NotBefore:    now.Add(-time.Hour),
-		NotAfter:     now.Add(time.Hour),
+		NotBefore:    now.Add(-24 * time.Hour),
+		NotAfter:     now.Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  usage,
 	}

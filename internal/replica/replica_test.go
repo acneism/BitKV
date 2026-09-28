@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"os"
 	"path/filepath"
@@ -106,13 +107,23 @@ func eachMode(t *testing.T, fn func(t *testing.T, unsafe bool)) {
 	}
 }
 
+var usedPorts sync.Map
+
 func freeAddr(t testing.TB) string {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	for range 1000 {
+		port := 20000 + rand.IntN(12000)
+		if _, taken := usedPorts.LoadOrStore(port, true); taken {
+			continue
+		}
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			continue
+		}
+		ln.Close()
+		return ln.Addr().String()
 	}
-	defer ln.Close()
-	return ln.Addr().String()
+	t.Fatal("no free port outside the ephemeral range")
+	return ""
 }
 
 func eventually(t testing.TB, what string, cond func() bool) {
