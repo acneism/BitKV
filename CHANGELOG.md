@@ -2,7 +2,7 @@
 
 Versions are listed newest first. CasketDB was called BitKV up to and including v0.9.
 
-## Unreleased
+## v0.11 — 2026-09-28
 
 ### Added
 
