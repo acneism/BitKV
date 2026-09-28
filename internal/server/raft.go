@@ -14,12 +14,28 @@ func cmdRaft(s *Server, c *client, args [][]byte) reply {
 	}
 	var err error
 	switch sub := upper(args[1]); {
+	case sub == "MEMBERS" && len(args) == 2:
+		var out arrayReply
+		for _, m := range rep.Members() {
+			role := "learner"
+			if m.Voter {
+				role = "voter"
+			}
+			out = append(out, stringsReply{m.ID, m.Addr, role})
+		}
+		return out
 	case sub == "TRANSFER" && len(args) <= 3:
 		to := ""
 		if len(args) == 3 {
 			to = string(args[2])
 		}
 		err = rep.TransferLeadership(to)
+	case sub == "ADDLEARNER" && len(args) == 4:
+		err = rep.AddLearner(string(args[2]), string(args[3]))
+	case sub == "PROMOTE" && len(args) == 3:
+		err = rep.Promote(string(args[2]))
+	case sub == "REMOVE" && len(args) == 3:
+		err = rep.Remove(string(args[2]))
 	default:
 		return unknownSubcommand(args)
 	}

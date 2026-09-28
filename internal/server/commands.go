@@ -419,6 +419,9 @@ func cmdInfo(s *Server, c *client, args [][]byte) reply {
 		line("raft_applied_index:%d", rs.Applied)
 		line("raft_leader_id:%s", rs.LeaderID)
 		line("raft_leader_addr:%s", rs.LeaderAddr)
+		line("raft_membership:%s", rs.Membership)
+		line("raft_voters:%d", rs.Voters)
+		line("raft_learners:%d", rs.Learners)
 	} else {
 		line("role:master")
 	}

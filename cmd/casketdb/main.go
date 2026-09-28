@@ -29,6 +29,7 @@ type config struct {
 	raftNoFsync bool
 	raftReads   string
 	raftDrift   float64
+	raftJoin    bool
 	opts        bitcask.Options
 }
 
@@ -50,6 +51,7 @@ func main() {
 	flag.BoolVar(&cfg.raftNoFsync, "raft-unsafe-no-fsync", false, "skip fsync of the raft log: faster, but a power loss on one node followed by a leader failure can lose acknowledged writes")
 	flag.StringVar(&cfg.raftReads, "raft-reads", "local", "read consistency in a cluster: local (may be stale), linearizable (confirmed by the leader) or lease (the leader answers from its lease)")
 	flag.Float64Var(&cfg.raftDrift, "raft-max-clock-drift", 0.1, "largest relative difference between node clock rates that -raft-reads lease tolerates")
+	flag.BoolVar(&cfg.raftJoin, "raft-join", false, "join a running cluster: -raft-peers lists this node and the members it can reach; add it on the leader with RAFT ADDLEARNER")
 	flag.Parse()
 	if cfg.requirePass == "" {
 		cfg.requirePass = os.Getenv("CASKETDB_REQUIREPASS")
@@ -159,6 +161,7 @@ func openReplica(cfg config, db *bitcask.DB) (*replica.Node, error) {
 		UnsafeNoFsync: cfg.raftNoFsync,
 		Reads:         reads,
 		MaxClockDrift: cfg.raftDrift,
+		Join:          cfg.raftJoin,
 	})
 }
 

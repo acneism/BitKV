@@ -12,7 +12,7 @@ CasketDB implements the string subset of Redis 7 over RESP2. Semantics, replies 
 | Transactions | MULTI, EXEC, DISCARD, WATCH, UNWATCH | See [transactions](#transactions) |
 | Connection | PING, ECHO, QUIT, AUTH, SELECT, HELLO, CLIENT | CLIENT supports ID, GETNAME, SETNAME, SETINFO |
 | Server | INFO, FLUSHDB, FLUSHALL, SAVE, BGREWRITEAOF, COMMAND, CONFIG | See [server commands](#server-commands) |
-| Cluster | RAFT TRANSFER | CasketDB's own command, see [cluster administration](#cluster-administration) |
+| Cluster | RAFT MEMBERS, RAFT ADDLEARNER, RAFT PROMOTE, RAFT REMOVE, RAFT TRANSFER | CasketDB's own commands, see [cluster administration](#cluster-administration) |
 
 ## Differences from Redis
 
@@ -64,11 +64,17 @@ With consistent reads turned on, a read that no leader could confirm returns `-T
 
 ### Cluster administration
 
-`RAFT` groups the commands that manage a CasketDB cluster. Redis has no equivalent: it is not the Redis Cluster protocol. The commands need a cluster node (`-raft-id`), must run on the leader and are rejected inside MULTI.
+`RAFT` groups the commands that manage a CasketDB cluster. Redis has no equivalent: it is not the Redis Cluster protocol. The commands need a cluster node (`-raft-id`) and are rejected inside MULTI. All but `RAFT MEMBERS` must run on the leader.
 
 | Command | Reply | Effect |
 | --- | --- | --- |
+| `RAFT MEMBERS` | Array of `[id, raft address, voter\|learner]` | The membership as this node knows it |
+| `RAFT ADDLEARNER id addr` | `OK` | Adds a node that was started with `-raft-join` as a learner |
+| `RAFT PROMOTE id` | `OK` | Waits until the learner has caught up, then makes it a voter |
+| `RAFT REMOVE id` | `OK` | Removes a voter or a learner; stop the removed node afterwards |
 | `RAFT TRANSFER [id]` | `OK` | Hands leadership to the node `id`, or to any other voter. See [leadership transfer](replication.md#leadership-transfer) |
+
+See [changing membership](replication.md#changing-membership) for the procedure.
 
 On a node that is not the leader, the commands answer `ERR this node is not the leader, run it on <id> (raft address <addr>)`.
 

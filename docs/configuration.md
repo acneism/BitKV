@@ -17,7 +17,8 @@ CasketDB is configured with command-line flags. There is no configuration file a
 | `-merge-interval` | `1m` | How often to check whether a log needs a merge; `0` turns automatic merge off |
 | `-proto-max-bulk-len` | 512 MB | Largest bulk string a client may send |
 | `-raft-id` | empty | Node id in the cluster. Setting it turns replication on |
-| `-raft-peers` | empty | All cluster nodes including this one: `id=host:port,…`. Must be the same on every node |
+| `-raft-peers` | empty | All cluster nodes including this one: `id=host:port,…`, the same on every node. Used only when the cluster is created and when a node joins; later the membership comes from the Raft log |
+| `-raft-join` | `false` | Join a running cluster instead of creating one. `-raft-peers` lists this node and every current member; see [changing membership](replication.md#changing-membership) |
 | `-raft-dir` | `<dir>/raft` | Raft log and snapshots |
 | `-raft-unsafe-no-fsync` | `false` | Do not fsync the Raft log. Faster, but see [replication](replication.md#running-without-fsync) |
 | `-raft-reads` | `local` | Read consistency in a cluster: `local` (may be stale), `linearizable` or `lease`, see [consistent reads](replication.md#consistent-reads) |
@@ -57,7 +58,7 @@ casketdb -addr 127.0.0.1:6383 -dir n3 -raft-id n3 -raft-peers n1=127.0.0.1:7001,
 | Clients | `connected_clients` |
 | Persistence | `aof_enabled`, `appendfsync`, `bitcask_logs`, `bitcask_data_files`, `bitcask_total_bytes`, `bitcask_live_bytes`, `bitcask_merges`, `bitcask_writes`, `bitcask_fsyncs` |
 | Stats | `total_connections_received`, `total_commands_processed`, `expired_keys` |
-| Replication | `role` (`master` on the leader and on a single node, `slave` on followers), `raft_state`, `raft_term`, `raft_applied_index`, `raft_leader_id`, `raft_leader_addr` |
+| Replication | `role` (`master` on the leader and on a single node, `slave` on followers), `raft_state`, `raft_term`, `raft_applied_index`, `raft_leader_id`, `raft_leader_addr`, `raft_membership` (`voter`, `learner` or `none`), `raft_voters`, `raft_learners` |
 | Keyspace | `db0:keys=…,expires=…` |
 
 `bitcask_total_bytes` minus `bitcask_live_bytes` is the space a merge can reclaim.

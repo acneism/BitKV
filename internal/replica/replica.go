@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,8 @@ var (
 	ErrOldRaftLog     = errors.New("replica: the raft directory was written by hashicorp/raft (CasketDB v0.9 or older), start the node from an empty directory")
 	ErrUnconfirmed    = errors.New("replica: no leader confirmed the read, retry")
 	ErrTransferFailed = errors.New("replica: leadership transfer failed")
+	ErrChangePending  = errors.New("replica: another membership change is in progress, retry")
+	ErrChangeUnknown  = errors.New("replica: the membership change was interrupted and may or may not be applied, check RAFT MEMBERS")
 )
 
 type ReadMode int
@@ -56,6 +59,7 @@ type Config struct {
 	TLS           *tls.Config
 	Reads         ReadMode
 	MaxClockDrift float64
+	Join          bool
 }
 
 type Status struct {
@@ -64,6 +68,15 @@ type Status struct {
 	Applied    uint64
 	LeaderID   string
 	LeaderAddr string
+	Membership string
+	Voters     int
+	Learners   int
+}
+
+type Member struct {
+	ID    string
+	Addr  string
+	Voter bool
 }
 
 type Node struct {
@@ -126,6 +139,7 @@ func open(db *bitcask.DB, cfg Config, tune func(*node.Config)) (*Node, error) {
 		ID:              raft.NodeID(cfg.ID),
 		Dir:             cfg.Dir,
 		Peers:           peers,
+		Join:            cfg.Join,
 		TLS:             cfg.TLS,
 		StateMachine:    fsm,
 		TickInterval:    10 * time.Millisecond,
@@ -274,13 +288,74 @@ func (n *Node) TransferLeadership(to string) error {
 
 func (n *Node) Status() Status {
 	st := n.rn.Status()
+	cs := n.rn.ConfState()
+	membership := "none"
+	switch {
+	case slices.Contains(cs.Voters, n.id):
+		membership = "voter"
+	case slices.Contains(cs.Learners, n.id):
+		membership = "learner"
+	}
 	return Status{
 		State:      st.State.String(),
 		Term:       st.Term,
 		Applied:    st.Applied,
 		LeaderID:   string(st.Lead),
-		LeaderAddr: n.rn.ConfState().Addrs[st.Lead],
+		LeaderAddr: cs.Addrs[st.Lead],
+		Membership: membership,
+		Voters:     len(cs.Voters),
+		Learners:   len(cs.Learners),
 	}
+}
+
+func (n *Node) Members() []Member {
+	cs := n.rn.ConfState()
+	var out []Member
+	for _, id := range cs.Voters {
+		out = append(out, Member{ID: string(id), Addr: cs.Addrs[id], Voter: true})
+	}
+	for _, id := range cs.Learners {
+		out = append(out, Member{ID: string(id), Addr: cs.Addrs[id]})
+	}
+	return out
+}
+
+func (n *Node) AddLearner(id, addr string) error {
+	return n.changeMembers(10*n.election, func(ctx context.Context) error {
+		return n.rn.AddLearner(ctx, raft.NodeID(id), addr)
+	})
+}
+
+func (n *Node) Promote(id string) error {
+	return n.changeMembers(10*time.Minute, func(ctx context.Context) error {
+		return n.rn.Promote(ctx, raft.NodeID(id))
+	})
+}
+
+func (n *Node) Remove(id string) error {
+	return n.changeMembers(10*n.election, func(ctx context.Context) error {
+		return n.rn.Remove(ctx, raft.NodeID(id))
+	})
+}
+
+func (n *Node) changeMembers(timeout time.Duration, change func(ctx context.Context) error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return membershipError(change(ctx))
+}
+
+func membershipError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, node.ErrNotLeader):
+		return ErrNotLeader
+	case errors.Is(err, raft.ErrConfChangePending):
+		return ErrChangePending
+	case errors.Is(err, raft.ErrConfChangeInvalid):
+		return err
+	}
+	return ErrChangeUnknown
 }
 
 func (n *Node) Close() error {

@@ -39,8 +39,16 @@ func eachReadMode(t *testing.T, fn func(t *testing.T, mode ReadMode)) {
 
 func consistentGet(t *testing.T, tn *testNode, key string) string {
 	t.Helper()
-	must(t, tn.node.ReadBarrier())
-	return get(tn, key)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := tn.node.ReadBarrier()
+		if err == nil {
+			return get(tn, key)
+		}
+		if !errors.Is(err, ErrUnconfirmed) || time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+	}
 }
 
 func TestParseReadMode(t *testing.T) {

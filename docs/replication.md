@@ -23,7 +23,7 @@ A node whose data directory holds keys but has no Raft state refuses to start: j
 
 ## Finding the leader
 
-`INFO replication` on any node shows `role`, `raft_state`, `raft_term`, `raft_leader_id` and `raft_leader_addr`. Clients find the leader themselves: from `INFO replication`, or by trying another node after a `READONLY` reply.
+`INFO replication` on any node shows `role`, `raft_state`, `raft_term`, `raft_leader_id`, `raft_leader_addr` and the node's own place in the cluster: `raft_membership` (`voter`, `learner` or `none`), `raft_voters` and `raft_learners`. Clients find the leader themselves: from `INFO replication`, or by trying another node after a `READONLY` reply.
 
 ## What is replicated
 
@@ -46,6 +46,49 @@ Reads see only committed values.
 - On a leadership change, proposed values are dropped. Writes that were waiting get `ERR replica: write interrupted by a leadership change, it may or may not be applied`: the write may or may not have been committed, as in any consensus system. Retry it if it is idempotent, or read the key to check.
 
 `FLUSHDB` also goes through Raft. It waits for all started writes to finish first.
+
+## Changing membership
+
+The set of voters and learners, with their Raft addresses, is stored in the Raft log. `-raft-peers` matters only when a cluster is created and when a node joins; after that each node takes the membership from its log. `RAFT MEMBERS` on any node shows it.
+
+Changes go one at a time and run on the leader. A second change while one is in progress returns `ERR replica: another membership change is in progress, retry`.
+
+### Adding a node
+
+1. Start the new node with an empty data directory, `-raft-join`, and `-raft-peers` listing itself and **every current member**, as `RAFT MEMBERS` shows them. A node that does not list the current leader rejects its messages and never catches up.
+
+   ```bash
+   casketdb -addr 10.0.0.4:6379 -dir data -raft-id n4 -raft-join \
+     -raft-peers n4=10.0.0.4:7000,n1=10.0.0.1:7000,n2=10.0.0.2:7000,n3=10.0.0.3:7000
+   ```
+
+2. On the leader, add it as a learner. A learner receives the log, or a snapshot if the log was compacted, but does not vote and does not count towards a majority, so a slow new node cannot stall the cluster.
+
+   ```bash
+   redis-cli -h 10.0.0.1 RAFT ADDLEARNER n4 10.0.0.4:7000
+   ```
+
+3. Promote it to a voter. `RAFT PROMOTE` waits until the learner has caught up with the leader, up to 10 minutes, then makes it a voter.
+
+   ```bash
+   redis-cli -h 10.0.0.1 RAFT PROMOTE n4
+   ```
+
+`INFO replication` on the new node shows `raft_membership:learner`, then `voter`. Keep an odd number of voters: 4 voters survive one failure, like 3, but need one more node for a majority.
+
+### Removing a node
+
+```bash
+redis-cli -h 10.0.0.1 RAFT REMOVE n2
+```
+
+Then **stop the removed node** and delete its directories. A removed node may never learn that it was removed. Running on with its old membership, it can disturb the cluster, and clients that reach it can get stale data. To remove the leader itself, run `RAFT REMOVE` with its own id: it steps down once the change commits, and the others elect a new leader. Or transfer the leadership first.
+
+To replace a failed node, remove it and add a new one with a new id and an empty directory.
+
+### If a change is interrupted
+
+If the leader changes or loses its majority while a change is in progress, the command returns `ERR replica: the membership change was interrupted and may or may not be applied, check RAFT MEMBERS`. Check `RAFT MEMBERS` on the new leader and repeat the command if needed. Repeating a change that was applied returns an error such as `n4 is already a member`.
 
 ## Leadership transfer
 
@@ -122,7 +165,6 @@ Each node expires keys by its own clock. On a follower, a key can stay visible f
 
 ## Limitations
 
-- Membership is fixed at start by `-raft-peers`; nodes cannot be added or removed at runtime.
 - The Raft transport has no authentication or encryption. The library supports TLS, but CasketDB has no flags for it yet. Run the cluster on a trusted network.
 
 More in [limitations](limitations.md).
