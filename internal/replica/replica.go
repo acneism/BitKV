@@ -45,7 +45,6 @@ type Status struct {
 type Node struct {
 	db      *bitcask.DB
 	id      raft.NodeID
-	peers   map[string]string
 	rn      *node.Node
 	fsm     *bitcaskFSM
 	flushMu sync.RWMutex
@@ -119,7 +118,7 @@ func open(db *bitcask.DB, cfg Config, tune func(*node.Config)) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	n := &Node{db: db, id: nc.ID, peers: cfg.Peers, rn: rn, fsm: fsm}
+	n := &Node{db: db, id: nc.ID, rn: rn, fsm: fsm}
 	n.wg.Add(1)
 	go n.watch()
 	return n, nil
@@ -204,7 +203,7 @@ func (n *Node) Status() Status {
 		Term:       st.Term,
 		Applied:    st.Applied,
 		LeaderID:   string(st.Lead),
-		LeaderAddr: n.peers[string(st.Lead)],
+		LeaderAddr: n.rn.ConfState().Addrs[st.Lead],
 	}
 }
 

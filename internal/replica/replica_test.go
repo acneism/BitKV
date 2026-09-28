@@ -199,12 +199,13 @@ func latestSnapshot(tn *testNode) (raft.SnapshotMeta, string, bool) {
 }
 
 func voters(tn *testNode) raft.ConfState {
-	var ids []raft.NodeID
-	for id := range tn.peers {
-		ids = append(ids, raft.NodeID(id))
+	cs := raft.ConfState{Addrs: map[raft.NodeID]string{}}
+	for id, addr := range tn.peers {
+		cs.Voters = append(cs.Voters, raft.NodeID(id))
+		cs.Addrs[raft.NodeID(id)] = addr
 	}
-	slices.Sort(ids)
-	return raft.ConfState{Voters: ids}
+	slices.Sort(cs.Voters)
+	return cs
 }
 
 func firstLogIndex(t *testing.T, tn *testNode) uint64 {
@@ -283,6 +284,9 @@ func testConcurrentWrites(t *testing.T, unsafe bool) {
 	}
 	eventually(t, "replicas to converge", converged(nodes, "counter", "400", 401))
 	for _, tn := range nodes {
+		if st := tn.node.Status(); st.LeaderID != l.id || st.LeaderAddr != l.peers[l.id] {
+			t.Fatalf("%s reports leader %s at %q, want %s at %q", tn.id, st.LeaderID, st.LeaderAddr, l.id, l.peers[l.id])
+		}
 		if tn == l {
 			continue
 		}
@@ -380,7 +384,8 @@ func TestApplyKeepsLogOrder(t *testing.T) {
 		entry(4, kindOps, set("b", "3")),
 		entry(5, kindFlush),
 		entry(6, kindOps, set("a", "4")),
-		entry(7, kindOps, set("b", "5"), bitcask.Op{Key: "a", Delete: true}),
+		{Index: 7, Term: 1, Type: raft.EntryConfChange, Data: []byte{9}},
+		entry(8, kindOps, set("b", "5"), bitcask.Op{Key: "a", Delete: true}),
 	}))
 	tn := &testNode{db: db}
 	for k, want := range map[string]string{"a": "", "b": "5", "x": ""} {
@@ -388,10 +393,10 @@ func TestApplyKeepsLogOrder(t *testing.T) {
 			t.Fatalf("%s = %q, want %q", k, got, want)
 		}
 	}
-	if f.applied.Load() != 7 {
-		t.Fatalf("applied %d, want 7", f.applied.Load())
+	if f.applied.Load() != 8 {
+		t.Fatalf("applied %d, want 8", f.applied.Load())
 	}
-	if err := f.Apply([]raft.Entry{{Index: 8, Term: 1, Data: []byte{9}}}); !errors.Is(err, errEntry) {
+	if err := f.Apply([]raft.Entry{{Index: 9, Term: 1, Data: []byte{9}}}); !errors.Is(err, errEntry) {
 		t.Fatalf("malformed entry: %v", err)
 	}
 }

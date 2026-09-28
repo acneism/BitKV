@@ -75,6 +75,10 @@ raft/
 
 A Raft directory written by hashicorp/raft (CasketDB v0.9 and older, then named BitKV) is rejected at start. See the [changelog](../CHANGELOG.md#upgrading-from-v09).
 
+## Upgrades
+
+Nodes negotiate the version of the protocol they speak to each other, so a release that keeps the protocol compatible can be rolled through the cluster one node at a time. The [changelog](../CHANGELOG.md) says when a release breaks compatibility and all nodes have to be upgraded together, as the move from v0.10 does.
+
 ## Running without fsync
 
 `-raft-unsafe-no-fsync` skips the fsync of Raft log segments, like `--unsafe-no-fsync` in etcd. Term, vote, log bounds and snapshots are still fsynced. A process crash stays safe, because the data is in the OS cache. A power loss is not: the node forgets acknowledged entries, and if the leader then fails, a new leader can be elected without them. The server logs a warning when the flag is set.

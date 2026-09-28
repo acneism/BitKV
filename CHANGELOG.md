@@ -2,6 +2,17 @@
 
 Versions are listed newest first. CasketDB was called BitKV up to and including v0.9.
 
+## Unreleased
+
+### Changed
+
+- Replication runs on github.com/acneism/raft v0.3.1. Nodes now negotiate the wire protocol version, so later upgrades can roll through the cluster one node at a time.
+- `raft_leader_addr` in `INFO` comes from the cluster configuration stored in the Raft log instead of `-raft-peers`.
+
+### Upgrading from v0.10
+
+- The wire format between nodes changed: a cluster cannot mix v0.10 nodes with newer ones. Stop all nodes, upgrade them, and start them again. Data and Raft directories open unchanged.
+
 ## v0.10 — 2026-09-28
 
 ### Changed
