@@ -12,6 +12,7 @@ CasketDB implements the string subset of Redis 7 over RESP2. Semantics, replies 
 | Transactions | MULTI, EXEC, DISCARD, WATCH, UNWATCH | See [transactions](#transactions) |
 | Connection | PING, ECHO, QUIT, AUTH, SELECT, HELLO, CLIENT | CLIENT supports ID, GETNAME, SETNAME, SETINFO |
 | Server | INFO, FLUSHDB, FLUSHALL, SAVE, BGREWRITEAOF, COMMAND, CONFIG | See [server commands](#server-commands) |
+| Cluster | RAFT TRANSFER | CasketDB's own command, see [cluster administration](#cluster-administration) |
 
 ## Differences from Redis
 
@@ -60,6 +61,16 @@ Expiry is exact to the millisecond. Keys expire lazily on access and actively in
 In a cluster only the leader accepts writes. Followers answer `-READONLY You can't write against a read only replica.`, as a Redis replica does. There is no Redis Cluster protocol (`CLUSTER`, `MOVED`, `ASK`): every node holds all keys.
 
 With consistent reads turned on, a read that no leader could confirm returns `-TRYAGAIN No leader confirmed the read, retry.` The read had no effect, so retrying is safe. See [consistent reads](replication.md#consistent-reads).
+
+### Cluster administration
+
+`RAFT` groups the commands that manage a CasketDB cluster. Redis has no equivalent: it is not the Redis Cluster protocol. The commands need a cluster node (`-raft-id`), must run on the leader and are rejected inside MULTI.
+
+| Command | Reply | Effect |
+| --- | --- | --- |
+| `RAFT TRANSFER [id]` | `OK` | Hands leadership to the node `id`, or to any other voter. See [leadership transfer](replication.md#leadership-transfer) |
+
+On a node that is not the leader, the commands answer `ERR this node is not the leader, run it on <id> (raft address <addr>)`.
 
 ## Limits
 

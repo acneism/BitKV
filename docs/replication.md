@@ -47,6 +47,19 @@ Reads see only committed values.
 
 `FLUSHDB` also goes through Raft. It waits for all started writes to finish first.
 
+## Leadership transfer
+
+Before you stop or restart the leader for maintenance, hand its leadership over, so the cluster does not wait an election timeout for a new one:
+
+```bash
+redis-cli -h 10.0.0.1 RAFT TRANSFER n2
+redis-cli -h 10.0.0.1 RAFT TRANSFER
+```
+
+Without an id, the leader tries the other voters one by one. The leader first brings the target up to date, then tells it to start an election at once. The command returns `OK` when the target leads.
+
+While the transfer runs, usually for well under a second, the leader rejects writes with `READONLY`; clients retry on the new leader. If the target does not take over within an election timeout, for example because it is down, the command returns `ERR replica: leadership transfer failed` and the old leader continues. Run the command on the leader; other nodes answer with the leader's id and Raft address.
+
 ## Consistent reads
 
 `-raft-reads` sets how a node answers read commands — GET, MGET, EXISTS, TTL, KEYS, SCAN and the others, and EXEC of a transaction without writes. Writes always go through Raft and are not affected.

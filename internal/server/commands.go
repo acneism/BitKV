@@ -102,6 +102,7 @@ func init() {
 		"command":      {arity: -1, kind: kindConn, conn: cmdCommand},
 		"config":       {arity: -2, kind: kindConn, conn: cmdConfig},
 		"info":         {arity: -1, kind: kindConn, conn: cmdInfo},
+		"raft":         {arity: -2, kind: kindConn, conn: cmdRaft},
 		"flushdb":      {arity: -1, kind: kindConn, conn: cmdFlush},
 		"flushall":     {arity: -1, kind: kindConn, conn: cmdFlush},
 		"save":         {arity: 1, kind: kindConn, conn: cmdSave},

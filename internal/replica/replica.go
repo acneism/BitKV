@@ -24,6 +24,7 @@ var (
 	ErrNotEmpty       = errors.New("replica: database has data but no raft state, start the node from an empty directory")
 	ErrOldRaftLog     = errors.New("replica: the raft directory was written by hashicorp/raft (CasketDB v0.9 or older), start the node from an empty directory")
 	ErrUnconfirmed    = errors.New("replica: no leader confirmed the read, retry")
+	ErrTransferFailed = errors.New("replica: leadership transfer failed")
 )
 
 type ReadMode int
@@ -74,8 +75,8 @@ type Node struct {
 	mu      sync.Mutex
 	ready   uint64
 
-	reads       ReadMode
-	readTimeout time.Duration
+	reads    ReadMode
+	election time.Duration
 
 	wg sync.WaitGroup
 }
@@ -146,7 +147,7 @@ func open(db *bitcask.DB, cfg Config, tune func(*node.Config)) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	n := &Node{db: db, id: nc.ID, rn: rn, fsm: fsm, reads: cfg.Reads, readTimeout: 2 * time.Duration(nc.ElectionTicks) * nc.TickInterval}
+	n := &Node{db: db, id: nc.ID, rn: rn, fsm: fsm, reads: cfg.Reads, election: time.Duration(nc.ElectionTicks) * nc.TickInterval}
 	n.wg.Add(1)
 	go n.watch()
 	return n, nil
@@ -228,7 +229,7 @@ func (n *Node) ReadBarrier() error {
 	if n.reads == ReadLocal {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), n.readTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*n.election)
 	defer cancel()
 	index, err := n.rn.ReadIndex(ctx)
 	if err == nil {
@@ -238,6 +239,37 @@ func (n *Node) ReadBarrier() error {
 		return ErrUnconfirmed
 	}
 	return nil
+}
+
+func (n *Node) TransferLeadership(to string) error {
+	if n.rn.Status().State != raft.StateLeader {
+		return ErrNotLeader
+	}
+	targets := []raft.NodeID{raft.NodeID(to)}
+	if to == "" {
+		targets = nil
+		for _, id := range n.rn.ConfState().Voters {
+			if id != n.id {
+				targets = append(targets, id)
+			}
+		}
+	}
+	err := ErrTransferFailed
+	for _, id := range targets {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*n.election)
+		err = n.rn.TransferLeadership(ctx, id)
+		cancel()
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, node.ErrNotLeader):
+			return ErrNotLeader
+		case errors.Is(err, raft.ErrTransferTarget):
+			return fmt.Errorf("replica: %q is not a voter of the cluster", id)
+		}
+		err = ErrTransferFailed
+	}
+	return err
 }
 
 func (n *Node) Status() Status {

@@ -7,6 +7,7 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 ### Added
 
 - Consistent reads: `-raft-reads linearizable` confirms every read with the leader, so it sees every write acknowledged before it started, on any node. `-raft-reads lease` lets the leader answer from its lease without a network round, assuming clock rates differ by at most `-raft-max-clock-drift`. A read that no leader confirms returns `TRYAGAIN`.
+- `RAFT TRANSFER [id]` hands leadership over to another voter before the leader is stopped for maintenance.
 
 ### Changed
 

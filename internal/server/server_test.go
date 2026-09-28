@@ -18,6 +18,22 @@ import (
 	"github.com/acneism/casketdb/internal/replica"
 )
 
+func TestRaftCommandNeedsCluster(t *testing.T) {
+	srv, db, addr := startServer(t, t.TempDir())
+	defer stopServer(t, srv, db)
+	c := dial(t, addr)
+	if got, ok := c.do("RAFT", "TRANSFER").(errReply); !ok || !strings.HasPrefix(string(got), "ERR RAFT needs a cluster") {
+		t.Fatalf("RAFT TRANSFER on a single node = %v", got)
+	}
+	if got, ok := c.do("RAFT").(errReply); !ok || !strings.HasPrefix(string(got), "ERR wrong number of arguments") {
+		t.Fatalf("RAFT without a subcommand = %v", got)
+	}
+	c.do("MULTI")
+	if got, ok := c.do("RAFT", "TRANSFER").(errReply); !ok || !strings.Contains(string(got), "not allowed inside a transaction") {
+		t.Fatalf("RAFT inside MULTI = %v", got)
+	}
+}
+
 func TestReplicaErrorsUseRedisCodes(t *testing.T) {
 	for err, prefix := range map[error]string{
 		replica.ErrNotLeader:   "READONLY ",
