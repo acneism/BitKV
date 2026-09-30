@@ -22,3 +22,6 @@ coverage.txt
 .idea/
 Thumbs.db
 .DS_Store
+
+# Private notes
+/TODO.md
