@@ -71,12 +71,12 @@ wsl ./fault.test -test.run TestFaults -test.timeout 30m -fault.duration=5m -faul
 
 [GitHub Actions](.github/workflows/ci.yml) runs on every push to `main` and every pull request:
 
-- `gofmt` and `go mod tidy -diff`;
+- `go mod tidy -diff`, [golangci-lint](#linters) and govulncheck;
 - `go vet` and `go test` on Linux, Windows and macOS;
 - `go test -race` on Linux;
 - one minute of `FuzzReadCommand`.
 
-The [nightly workflow](.github/workflows/nightly.yml), which can also be started by hand, runs `TestFaults` with linearizable reads, `TestFaults` with lease reads and `TestMembershipChanges`, ten minutes each. A failed run keeps the node logs and the Porcupine visualization as build artifacts.
+The [nightly workflow](.github/workflows/nightly.yml), which can also be started by hand, runs govulncheck, so a new advisory shows up without a push, and `TestFaults` with linearizable reads, `TestFaults` with lease reads and `TestMembershipChanges`, ten minutes each. A failed run keeps the node logs and the Porcupine visualization as build artifacts.
 
 `main` is protected: a commit lands there only after CI has passed on it, on a branch that is up to date with `main`. Push a branch, open a pull request, wait for a green run, then merge.
 
@@ -92,11 +92,23 @@ Fsync time varies a lot between runs. When you compare two builds, alternate the
 
 ## Code style
 
-- Code is formatted with `gofmt` and passes `go vet`.
+- Code is formatted with `gofmt` and passes `go vet` and the [linters](#linters).
 - **No comments in code, tests included.** Names and structure carry the intent. Build constraints such as `//go:build` are not comments and stay.
 - Match the surrounding code: naming, error handling, test helpers.
 - Code outside `internal/replica` uses only the standard library; the fault-injection tests also use Porcupine. Discuss a new dependency in an issue first.
 - Everything that knows about Raft stays in `internal/replica`.
+
+### Linters
+
+[.golangci.yml](.golangci.yml) configures [golangci-lint](https://golangci-lint.run/) v2: errcheck, govet, ineffassign, staticcheck and unused, plus gocritic, revive without its rules about comments, and gofmt. CI runs v2.14; install it as the golangci-lint documentation describes, then:
+
+```bash
+golangci-lint run
+go install golang.org/x/vuln/cmd/govulncheck@latest
+govulncheck ./...
+```
+
+Handle every error. When ignoring one is right, say so with `_ =`. The linter does not flag unchecked `Close`, `Flush` and `os.Remove`; check them anyway wherever a failure can lose data, as when closing a file that was written. Fix a finding rather than silencing it; a new exclusion in the config needs a reason in the pull request.
 
 ## Tests for a change
 
