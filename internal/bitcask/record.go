@@ -77,27 +77,14 @@ func decodeTxHeader(r rawRecord) (uint64, uint32, bool) {
 	return binary.LittleEndian.Uint64(r.value), binary.LittleEndian.Uint32(r.value[8:]), true
 }
 
-func appendTxCommit(dst []byte, txid uint64) []byte {
-	var v [8]byte
-	binary.LittleEndian.PutUint64(v[:], txid)
-	return appendRecord(dst, flagTxCommit, 0, "", v[:])
+func appendControl(dst []byte, flag byte, v uint64) []byte {
+	var b [8]byte
+	binary.LittleEndian.PutUint64(b[:], v)
+	return appendRecord(dst, flag, 0, "", b[:])
 }
 
-func decodeTxCommit(r rawRecord) (uint64, bool) {
-	if r.flags&flagTxCommit == 0 || len(r.value) != 8 {
-		return 0, false
-	}
-	return binary.LittleEndian.Uint64(r.value), true
-}
-
-func appendMark(dst []byte, index uint64) []byte {
-	var v [8]byte
-	binary.LittleEndian.PutUint64(v[:], index)
-	return appendRecord(dst, flagMark, 0, "", v[:])
-}
-
-func decodeMark(r rawRecord) (uint64, bool) {
-	if r.flags&flagMark == 0 || len(r.value) != 8 {
+func decodeControl(r rawRecord, flag byte) (uint64, bool) {
+	if r.flags&flag == 0 || len(r.value) != 8 {
 		return 0, false
 	}
 	return binary.LittleEndian.Uint64(r.value), true

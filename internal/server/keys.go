@@ -90,36 +90,38 @@ func cmdScan(tx *bitcask.Tx, args [][]byte) (reply, error) {
 }
 
 func cmdExpire(tx *bitcask.Tx, args [][]byte) (reply, error) {
-	return expireGeneric(tx, args, 1000, false)
+	return expireGeneric(tx, args, "EX")
 }
 
 func cmdPExpire(tx *bitcask.Tx, args [][]byte) (reply, error) {
-	return expireGeneric(tx, args, 1, false)
+	return expireGeneric(tx, args, "PX")
 }
 
 func cmdExpireAt(tx *bitcask.Tx, args [][]byte) (reply, error) {
-	return expireGeneric(tx, args, 1000, true)
+	return expireGeneric(tx, args, "EXAT")
 }
 
 func cmdPExpireAt(tx *bitcask.Tx, args [][]byte) (reply, error) {
-	return expireGeneric(tx, args, 1, true)
+	return expireGeneric(tx, args, "PXAT")
 }
 
-func expireTime(now, n, unit int64, absolute bool) (int64, bool) {
-	if n > math.MaxInt64/unit || n < math.MinInt64/unit {
+func expireTime(now, n int64, unit string) (int64, bool) {
+	if unit == "EX" || unit == "EXAT" {
+		if n > math.MaxInt64/1000 || n < math.MinInt64/1000 {
+			return 0, false
+		}
+		n *= 1000
+	}
+	if unit == "EXAT" || unit == "PXAT" {
+		return n, true
+	}
+	if (n > 0 && now > math.MaxInt64-n) || (n < 0 && now < math.MinInt64-n) {
 		return 0, false
 	}
-	v := n * unit
-	if absolute {
-		return v, true
-	}
-	if (v > 0 && now > math.MaxInt64-v) || (v < 0 && now < math.MinInt64-v) {
-		return 0, false
-	}
-	return now + v, true
+	return now + n, true
 }
 
-func expireGeneric(tx *bitcask.Tx, args [][]byte, unit int64, absolute bool) (reply, error) {
+func expireGeneric(tx *bitcask.Tx, args [][]byte, unit string) (reply, error) {
 	n, ok := parseInt(args[2])
 	if !ok {
 		return errorReply(errNotInteger), nil
@@ -145,7 +147,7 @@ func expireGeneric(tx *bitcask.Tx, args [][]byte, unit int64, absolute bool) (re
 	if gt && lt {
 		return errorReply("ERR GT and LT options at the same time are not compatible"), nil
 	}
-	when, ok := expireTime(tx.Now(), n, unit, absolute)
+	when, ok := expireTime(tx.Now(), n, unit)
 	if !ok {
 		return errorReply("ERR invalid expire time in '" + strings.ToLower(string(args[0])) + "' command"), nil
 	}

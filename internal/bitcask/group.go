@@ -85,7 +85,7 @@ func (g *logGroup) reserveLocked(b *pendingBatch) error {
 }
 
 func (g *logGroup) reserveMarkLocked(index uint64) (uint64, error) {
-	b := &pendingBatch{buf: appendMark(nil, index)}
+	b := &pendingBatch{buf: appendControl(nil, flagMark, index)}
 	if err := g.reserveLocked(b); err != nil {
 		return 0, err
 	}

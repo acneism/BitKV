@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 )
 
 type recPos struct {
@@ -42,16 +43,11 @@ type loadState struct {
 func (db *DB) load() error {
 	states := make([]*loadState, len(db.groups))
 	errs := make([]error, len(db.groups))
-	done := make(chan struct{}, len(db.groups))
+	var wg sync.WaitGroup
 	for i, g := range db.groups {
-		go func() {
-			states[i], errs[i] = g.load()
-			done <- struct{}{}
-		}()
+		wg.Go(func() { states[i], errs[i] = g.load() })
 	}
-	for range db.groups {
-		<-done
-	}
+	wg.Wait()
 	if err := errors.Join(errs...); err != nil {
 		return err
 	}
@@ -85,7 +81,7 @@ func (g *logGroup) writeCommits(txids []uint64) error {
 	}
 	b := &pendingBatch{}
 	for _, txid := range txids {
-		b.buf = appendTxCommit(b.buf, txid)
+		b.buf = appendControl(b.buf, flagTxCommit, txid)
 	}
 	if err := g.reserve(b); err != nil {
 		return err
@@ -175,9 +171,9 @@ func (st *loadState) loadData(df *dataFile, last bool) (bool, error) {
 		}
 		if txid, parts, ok := decodeTxHeader(batch[0]); ok {
 			st.applyPart(df.id, txid, parts, batch[1:])
-		} else if txid, ok := decodeTxCommit(batch[0]); ok && len(batch) == 1 {
+		} else if txid, ok := decodeControl(batch[0], flagTxCommit); ok && len(batch) == 1 {
 			st.commits[txid] = true
-		} else if index, ok := decodeMark(batch[0]); ok && len(batch) == 1 {
+		} else if index, ok := decodeControl(batch[0], flagMark); ok && len(batch) == 1 {
 			st.mark = max(st.mark, index)
 		} else {
 			for _, r := range batch {

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/acneism/casketdb/internal/bitcask"
@@ -87,8 +88,7 @@ type Node struct {
 	rn      *node.Node
 	fsm     *bitcaskFSM
 	flushMu sync.RWMutex
-	mu      sync.Mutex
-	ready   uint64
+	ready   atomic.Uint64
 
 	reads    ReadMode
 	election time.Duration
@@ -180,22 +180,12 @@ func open(db *bitcask.DB, cfg Config, tune func(*node.Config)) (*Node, error) {
 func (n *Node) watch() {
 	defer n.wg.Done()
 	for e := range n.rn.Events() {
-		n.mu.Lock()
-		n.ready = 0
-		n.mu.Unlock()
+		n.ready.Store(0)
 		n.db.DropProposed()
 		if e.Ready && e.Leader == n.id {
-			n.mu.Lock()
-			n.ready = e.Term
-			n.mu.Unlock()
+			n.ready.Store(e.Term)
 		}
 	}
-}
-
-func (n *Node) term() uint64 {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	return n.ready
 }
 
 func (n *Node) propose(term uint64, data []byte) (node.Proposal, error) {
@@ -212,7 +202,7 @@ func (n *Node) propose(term uint64, data []byte) (node.Proposal, error) {
 func (n *Node) Update(scope bitcask.Scope, fn func(tx *bitcask.Tx) error) error {
 	n.flushMu.RLock()
 	defer n.flushMu.RUnlock()
-	term := n.term()
+	term := n.ready.Load()
 	if term == 0 {
 		return ErrNotLeader
 	}
@@ -232,7 +222,7 @@ func (n *Node) Update(scope bitcask.Scope, fn func(tx *bitcask.Tx) error) error 
 func (n *Node) Flush() error {
 	n.flushMu.Lock()
 	defer n.flushMu.Unlock()
-	term := n.term()
+	term := n.ready.Load()
 	if term == 0 {
 		return ErrNotLeader
 	}

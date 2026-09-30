@@ -15,7 +15,7 @@ import (
 
 func leaderOf(nodes []*testNode) *testNode {
 	for _, tn := range nodes {
-		if tn.node != nil && tn.node.term() != 0 {
+		if tn.node != nil && tn.node.ready.Load() != 0 {
 			return tn
 		}
 	}
@@ -28,7 +28,7 @@ func handOver(t *testing.T, nodes []*testNode, from *testNode, to string) *testN
 	var next *testNode
 	eventually(t, "leadership to move", func() bool {
 		next = leaderOf(nodes)
-		return next != nil && next != from && from.node.term() == 0
+		return next != nil && next != from && from.node.ready.Load() == 0
 	})
 	if to != "" && next.id != to {
 		t.Fatalf("leadership went to %s, want %s", next.id, to)
@@ -90,7 +90,7 @@ func TestNoOpWriteWaitsForTheProposalItRead(t *testing.T) {
 	}()
 	eventually(t, "the delete to be proposed", func() bool {
 		gone := false
-		l.db.Propose(bitcask.Keys("k"), l.node.term(), func(tx *bitcask.Tx) error {
+		l.db.Propose(bitcask.Keys("k"), l.node.ready.Load(), func(tx *bitcask.Tx) error {
 			gone = !tx.Exists("k")
 			return nil
 		}, nil)

@@ -17,13 +17,15 @@ func NewWriter(w io.Writer) *Writer {
 }
 
 func (w *Writer) Simple(s string) {
-	w.bw.WriteByte('+')
-	w.bw.WriteString(oneLine(s))
-	w.bw.WriteString("\r\n")
+	w.line('+', s)
 }
 
 func (w *Writer) Error(s string) {
-	w.bw.WriteByte('-')
+	w.line('-', s)
+}
+
+func (w *Writer) line(p byte, s string) {
+	w.bw.WriteByte(p)
 	w.bw.WriteString(oneLine(s))
 	w.bw.WriteString("\r\n")
 }

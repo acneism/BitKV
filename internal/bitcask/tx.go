@@ -545,7 +545,7 @@ func (tx *Tx) commit() ([]waitPoint, error) {
 		return nil, err
 	}
 	for i, gb := range parts {
-		c := &pendingBatch{buf: appendTxCommit(nil, txid)}
+		c := &pendingBatch{buf: appendControl(nil, flagTxCommit, txid)}
 		if err := gb.g.reserve(c); err != nil {
 			return nil, err
 		}

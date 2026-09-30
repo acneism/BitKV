@@ -7,31 +7,6 @@ import (
 	"github.com/acneism/casketdb/internal/bitcask"
 )
 
-func absoluteExpire(now int64, unit string, n int64) (int64, bool) {
-	if n <= 0 {
-		return 0, false
-	}
-	switch unit {
-	case "EX":
-		if n > (math.MaxInt64-now)/1000 {
-			return 0, false
-		}
-		return now + n*1000, true
-	case "PX":
-		if n > math.MaxInt64-now {
-			return 0, false
-		}
-		return now + n, true
-	case "EXAT":
-		if n > math.MaxInt64/1000 {
-			return 0, false
-		}
-		return n * 1000, true
-	default:
-		return n, true
-	}
-}
-
 func cmdGet(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	value, found, err := tx.Get(string(args[1]))
 	if err != nil || !found {
@@ -62,8 +37,8 @@ func cmdSet(tx *bitcask.Tx, args [][]byte) (reply, error) {
 			if !ok {
 				return errorReply(errNotInteger), nil
 			}
-			at, ok := absoluteExpire(tx.Now(), opt, n)
-			if !ok {
+			at, ok := expireTime(tx.Now(), n, opt)
+			if !ok || n <= 0 {
 				return errorReply("ERR invalid expire time in 'set' command"), nil
 			}
 			expireAt, hasExpire = at, true
@@ -75,28 +50,23 @@ func cmdSet(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	if (nx && xx) || (keepTTL && hasExpire) {
 		return errorReply(errSyntax), nil
 	}
-	var old []byte
-	var existed bool
+	var result reply = okReply
+	existed := tx.Exists(key)
 	if get {
-		var err error
-		if old, existed, err = tx.Get(key); err != nil {
+		old, found, err := tx.Get(key)
+		if err != nil {
 			return nil, err
 		}
-	} else {
-		existed = tx.Exists(key)
-	}
-	var result reply = okReply
-	switch {
-	case get && existed:
-		result = bulkReply(old)
-	case get:
-		result = nilReply
+		result, existed = nilReply, found
+		if found {
+			result = bulkReply(old)
+		}
 	}
 	if (nx && existed) || (xx && !existed) {
-		if get {
-			return result, nil
+		if !get {
+			result = nilReply
 		}
-		return nilReply, nil
+		return result, nil
 	}
 	if keepTTL {
 		expireAt, _ = tx.ExpireAt(key)
@@ -127,8 +97,8 @@ func setWithExpire(tx *bitcask.Tx, args [][]byte, unit, name string) (reply, err
 	if !ok {
 		return errorReply(errNotInteger), nil
 	}
-	at, ok := absoluteExpire(tx.Now(), unit, n)
-	if !ok {
+	at, ok := expireTime(tx.Now(), n, unit)
+	if !ok || n <= 0 {
 		return errorReply("ERR invalid expire time in '" + name + "' command"), nil
 	}
 	tx.Put(string(args[1]), args[3], at)

@@ -56,14 +56,6 @@ func (kd *keydir) shard(key string) *shard {
 	return &kd.shards[shardIndex(key)]
 }
 
-func (kd *keydir) set(key string, e entry) {
-	kd.shard(key).set(key, e)
-}
-
-func (kd *keydir) remove(key string) bool {
-	return kd.shard(key).remove(key)
-}
-
 func (kd *keydir) reset() {
 	for i := range kd.shards {
 		kd.shards[i].reset()
@@ -117,22 +109,22 @@ func (s *shard) remove(key string) bool {
 	return true
 }
 
-func (s *shard) relocate(key string, oldFile uint32, oldOffset int64, newFile uint32, newOffset int64) {
+func (s *shard) at(key string, fileID uint32, offset int64) (entry, bool) {
 	e, ok := s.m[key]
-	if !ok || e.fileID != oldFile || e.offset != oldOffset {
-		return
+	return e, ok && e.fileID == fileID && e.offset == offset
+}
+
+func (s *shard) relocate(key string, oldFile uint32, oldOffset int64, newFile uint32, newOffset int64) {
+	if e, ok := s.at(key, oldFile, oldOffset); ok {
+		e.fileID, e.offset = newFile, newOffset
+		s.m[key] = e
 	}
-	e.fileID, e.offset = newFile, newOffset
-	s.m[key] = e
 }
 
 func (s *shard) removeAt(key string, fileID uint32, offset int64) {
-	e, ok := s.m[key]
-	if !ok || e.fileID != fileID || e.offset != offset {
-		return
+	if _, ok := s.at(key, fileID, offset); ok {
+		s.remove(key)
 	}
-	delete(s.m, key)
-	s.forget(key, e)
 }
 
 func (s *shard) addOverlay(key string, o overlayEntry) {

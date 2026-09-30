@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"runtime"
 	"slices"
@@ -349,13 +350,8 @@ func cmdConfig(s *Server, c *client, args [][]byte) reply {
 			"databases":          "1",
 			"proto-max-bulk-len": strconv.Itoa(s.cfg.MaxBulkLen),
 		}
-		names := make([]string, 0, len(params))
-		for name := range params {
-			names = append(names, name)
-		}
-		slices.Sort(names)
 		var out stringsReply
-		for _, name := range names {
+		for _, name := range slices.Sorted(maps.Keys(params)) {
 			for _, p := range args[2:] {
 				if matchGlob(strings.ToLower(string(p)), name) {
 					out = append(out, name, params[name])

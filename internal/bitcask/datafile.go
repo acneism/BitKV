@@ -1,6 +1,7 @@
 package bitcask
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -100,7 +101,7 @@ func (df *dataFile) read(offset int64, key string, valueSize uint32) ([]byte, er
 	}
 	value := buf[headerSize+len(key):]
 	if cached {
-		value = append(make([]byte, 0, len(value)), value...)
+		value = bytes.Clone(value)
 	}
 	return value, nil
 }

@@ -334,6 +334,14 @@ func (db *DB) LinkFiles(dir string) (int, []SnapshotFile, error) {
 	db.txGate.Lock()
 	defer db.txGate.Unlock()
 	var files []SnapshotFile
+	add := func(src string, size int64) error {
+		rel, err := filepath.Rel(db.dir, src)
+		if err != nil {
+			return err
+		}
+		files = append(files, SnapshotFile{Path: filepath.ToSlash(rel), Size: size})
+		return linkOrCopy(src, filepath.Join(dir, rel), size)
+	}
 	for _, g := range db.groups {
 		g.filesMu.RLock()
 		defer g.filesMu.RUnlock()
@@ -342,27 +350,14 @@ func (db *DB) LinkFiles(dir string) (int, []SnapshotFile, error) {
 			if size == 0 {
 				continue
 			}
-			names := []string{fileName(id, dataExt)}
-			if fileExists(filepath.Join(g.dir, fileName(id, hintExt))) {
-				names = append(names, fileName(id, hintExt))
+			if err := add(filepath.Join(g.dir, fileName(id, dataExt)), size); err != nil {
+				return 0, nil, err
 			}
-			for i, name := range names {
-				src := filepath.Join(g.dir, name)
-				rel, err := filepath.Rel(db.dir, src)
-				if err != nil {
+			hint := filepath.Join(g.dir, fileName(id, hintExt))
+			if st, err := os.Stat(hint); err == nil {
+				if err := add(hint, st.Size()); err != nil {
 					return 0, nil, err
 				}
-				if i > 0 {
-					st, err := os.Stat(src)
-					if err != nil {
-						return 0, nil, err
-					}
-					size = st.Size()
-				}
-				if err := linkOrCopy(src, filepath.Join(dir, rel), size); err != nil {
-					return 0, nil, err
-				}
-				files = append(files, SnapshotFile{Path: filepath.ToSlash(rel), Size: size})
 			}
 		}
 	}

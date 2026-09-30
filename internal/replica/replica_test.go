@@ -150,7 +150,7 @@ func leader(t testing.TB, nodes []*testNode) *testNode {
 	var found *testNode
 	eventually(t, "a ready leader", func() bool {
 		for _, tn := range nodes {
-			if tn.node != nil && tn.node.term() != 0 {
+			if tn.node != nil && tn.node.ready.Load() != 0 {
 				found = tn
 				return true
 			}
