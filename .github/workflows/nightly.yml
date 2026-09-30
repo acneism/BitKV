@@ -9,6 +9,11 @@ permissions:
   contents: read
 
 jobs:
+  vuln:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: golang/govulncheck-action@v1
+
   faults:
     strategy:
       fail-fast: false
@@ -24,8 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Build
@@ -37,7 +42,7 @@ jobs:
           "$RUNNER_TEMP/fault.test" -test.v -test.timeout 30m -fault.bin="$RUNNER_TEMP/casketdb" \
             -fault.out="$RUNNER_TEMP/porcupine.html" ${{ matrix.args }}
       - if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
           path: |
