@@ -1,0 +1,46 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  faults:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: faults-linearizable
+            args: -test.run '^TestFaults$' -fault.duration=10m
+          - name: faults-lease
+            args: -test.run '^TestFaults$' -fault.duration=10m -fault.reads=lease
+          - name: membership
+            args: -test.run '^TestMembershipChanges$' -member.duration=10m
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: |
+          go build -o "$RUNNER_TEMP/casketdb" ./cmd/casketdb
+          go test -c -o "$RUNNER_TEMP/fault.test" ./cmd/casketdb
+      - name: Run
+        run: |
+          "$RUNNER_TEMP/fault.test" -test.v -test.timeout 30m -fault.bin="$RUNNER_TEMP/casketdb" \
+            -fault.out="$RUNNER_TEMP/porcupine.html" ${{ matrix.args }}
+      - if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            ${{ runner.temp }}/porcupine.html
+            /tmp/casketdb-fault-*
+          if-no-files-found: ignore

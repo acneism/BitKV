@@ -76,9 +76,9 @@ wsl ./fault.test -test.run TestFaults -test.timeout 30m -fault.duration=5m -faul
 - `go test -race` on Linux;
 - one minute of `FuzzReadCommand`.
 
-Every night, and when started by hand, it also runs `TestFaults` with linearizable reads, `TestFaults` with lease reads and `TestMembershipChanges`, ten minutes each. A failed run keeps the node logs and the Porcupine visualization as build artifacts.
+The [nightly workflow](.github/workflows/nightly.yml), which can also be started by hand, runs `TestFaults` with linearizable reads, `TestFaults` with lease reads and `TestMembershipChanges`, ten minutes each. A failed run keeps the node logs and the Porcupine visualization as build artifacts.
 
-A pull request is merged only with a green run.
+`main` is protected: changes reach it only through a pull request whose CI run is green and whose branch is up to date with `main`.
 
 ### Benchmarks
 
