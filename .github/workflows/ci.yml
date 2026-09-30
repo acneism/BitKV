@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Run gofmt on:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go mod tidy
+        run: go mod tidy -diff
+
+  test:
+    if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -timeout 15m ./...
+
+  race:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go test -race -timeout 20m ./...
+
+  fuzz:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go test -run '^$' -fuzz '^FuzzReadCommand$' -fuzztime 60s ./internal/resp
+
+  faults:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: faults-linearizable
+            args: -test.run '^TestFaults$' -fault.duration=10m
+          - name: faults-lease
+            args: -test.run '^TestFaults$' -fault.duration=10m -fault.reads=lease
+          - name: membership
+            args: -test.run '^TestMembershipChanges$' -member.duration=10m
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: |
+          go build -o "$RUNNER_TEMP/casketdb" ./cmd/casketdb
+          go test -c -o "$RUNNER_TEMP/fault.test" ./cmd/casketdb
+      - name: Run
+        run: |
+          "$RUNNER_TEMP/fault.test" -test.v -test.timeout 30m -fault.bin="$RUNNER_TEMP/casketdb" \
+            -fault.out="$RUNNER_TEMP/porcupine.html" ${{ matrix.args }}
+      - if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            ${{ runner.temp }}/porcupine.html
+            /tmp/casketdb-fault-*
+          if-no-files-found: ignore

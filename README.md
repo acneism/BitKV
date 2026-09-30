@@ -5,6 +5,10 @@
   </picture>
 </h1>
 
+<p align="center">
+  <a href="https://github.com/acneism/casketdb/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/acneism/casketdb/actions/workflows/ci.yml/badge.svg"></a>
+</p>
+
 CasketDB is a Redis-compatible key-value store written in Go. It keeps values on disk in a Bitcask log, runs commands on all cores, and can replicate through Raft so that a failed node never takes acknowledged writes with it.
 
 Any Redis client — `redis-cli`, `redis-benchmark`, go-redis, redis-py — works with CasketDB unchanged, within the [supported commands](docs/commands.md).

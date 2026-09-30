@@ -67,6 +67,21 @@ GOOS=linux go test -c -o fault.test ./cmd/casketdb
 wsl ./fault.test -test.run TestFaults -test.timeout 30m -fault.duration=5m -fault.bin=./casketdb-linux
 ```
 
+### Continuous integration
+
+[GitHub Actions](.github/workflows/ci.yml) runs on every push to `main` and every pull request:
+
+- `gofmt` and `go mod tidy -diff`;
+- `go vet` and `go test` on Linux, Windows and macOS;
+- `go test -race` on Linux;
+- one minute of `FuzzReadCommand`.
+
+Every night, and when started by hand, it also runs `TestFaults` with linearizable reads, `TestFaults` with lease reads and `TestMembershipChanges`, ten minutes each. A failed run keeps the node logs and the Porcupine visualization as build artifacts.
+
+A pull request is merged only with a green run.
+
+### Benchmarks
+
 Benchmarks live next to the code, for example:
 
 ```bash
