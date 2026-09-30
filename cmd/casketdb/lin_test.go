@@ -25,7 +25,14 @@ var (
 	faultOut       = flag.String("fault.out", "", "file for the Porcupine visualization when the check fails")
 )
 
-const keys = 50
+const (
+	keys     = 50
+	minEpoch = 2 * time.Minute
+)
+
+func epochKey(epoch, k int) string {
+	return fmt.Sprintf("e%d-k%d", epoch, k)
+}
 
 type kvInput struct {
 	op    byte
@@ -179,8 +186,8 @@ func (h *harness) execute(addr string, in kvInput) (kvOutput, outcome) {
 	return out, done
 }
 
-func randomInput(client, seq int) kvInput {
-	in := kvInput{key: fmt.Sprintf("k%d", rand.IntN(keys)), value: int64(client*1_000_000 + seq)}
+func randomInput(epoch, client, seq int) kvInput {
+	in := kvInput{key: epochKey(epoch, rand.IntN(keys)), value: int64(client*1_000_000 + seq)}
 	switch r := rand.IntN(20); {
 	case r < 9:
 		in.op = 'g'
@@ -197,6 +204,13 @@ func randomInput(client, seq int) kvInput {
 }
 
 func (h *harness) linearizability(d time.Duration, nemesis func(until time.Time)) {
+	epochs := max(1, int(d/minEpoch))
+	for epoch := range epochs {
+		h.checkEpoch(epoch, d/time.Duration(epochs), nemesis)
+	}
+}
+
+func (h *harness) checkEpoch(epoch int, d time.Duration, nemesis func(until time.Time)) {
 	t := h.t
 	start := time.Now()
 	now := func() int64 { return int64(time.Since(start)) }
@@ -217,7 +231,7 @@ func (h *harness) linearizability(d time.Duration, nemesis func(until time.Time)
 			client := int(clients.Add(1) - 1)
 			writer := h.pick()
 			for seq := 0; time.Now().Before(deadline); seq++ {
-				in := randomInput(client, seq)
+				in := randomInput(epoch, client, seq)
 				target := writer
 				if in.op == 'g' {
 					target = h.pick()
@@ -252,7 +266,7 @@ func (h *harness) linearizability(d time.Duration, nemesis func(until time.Time)
 	final := int(clients.Add(1) - 1)
 	finalStart := time.Now()
 	for k := range keys {
-		in := kvInput{op: 'g', key: fmt.Sprintf("k%d", k)}
+		in := kvInput{op: 'g', key: epochKey(epoch, k)}
 		for {
 			call := now()
 			out, res := h.execute(h.pick(), in)
@@ -274,7 +288,7 @@ func (h *harness) linearizability(d time.Duration, nemesis func(until time.Time)
 
 	checkStart := time.Now()
 	res, info := porcupine.CheckOperationsVerbose(kvModel, history, 5*time.Minute)
-	t.Logf("%d operations completed, %d with unknown outcome; checked in %v: %s", completed.Load(), unknowns.Load(), time.Since(checkStart).Round(time.Millisecond), res)
+	t.Logf("epoch %d: %d operations completed, %d with unknown outcome; checked in %v: %s", epoch, completed.Load(), unknowns.Load(), time.Since(checkStart).Round(time.Millisecond), res)
 	if completed.Load() == 0 {
 		t.Fatal("no operation completed")
 	}

@@ -57,7 +57,7 @@ go test ./cmd/casketdb -run TestFaults -timeout 30m -args -fault.duration=5m
 go test ./cmd/casketdb -run TestMembershipChanges -timeout 30m -args -member.duration=5m
 ```
 
-`TestFaults` kills nodes with `kill -9`, cuts network links between nodes in one or both directions through a proxy, and transfers leadership. `TestMembershipChanges` adds nodes with `-raft-join` and removes voters while the load runs. Other flags: `-fault.reads=lease` runs the nodes with lease reads, `-fault.nosync` with `-raft-unsafe-no-fsync`, `-fault.bin` uses a prebuilt binary, `-fault.out` sets where the Porcupine visualization of a failure goes. Node logs stay in the test's temporary directory, printed on failure.
+`TestFaults` kills nodes with `kill -9`, cuts network links between nodes in one or both directions through a proxy, and transfers leadership. `TestMembershipChanges` adds nodes with `-raft-join` and removes voters while the load runs. A run of four minutes or longer is split into epochs of at least two minutes. Each epoch uses its own keys, ends with the faults healed and every key read back, and is checked on its own. An operation with an unknown outcome stays open until the end of its history, and the memory the check needs grows fast with the number of open operations on a key: a single ten-minute history took more than 5 GB. Other flags: `-fault.reads=lease` runs the nodes with lease reads, `-fault.nosync` with `-raft-unsafe-no-fsync`, `-fault.bin` uses a prebuilt binary, `-fault.out` sets where the Porcupine visualization of a failure goes. Node logs stay in the test's temporary directory, printed on failure.
 
 On Linux without a Go toolchain, cross-compile both the server and the test:
 
