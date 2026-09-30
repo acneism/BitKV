@@ -28,6 +28,7 @@ type proc struct {
 	listen  string
 	peers   string
 	join    bool
+	joining bool
 	removed bool
 	cmd     *exec.Cmd
 	out     *os.File
@@ -167,7 +168,7 @@ func (h *harness) live() []*proc {
 	defer h.mu.Unlock()
 	var out []*proc
 	for _, p := range h.procs {
-		if !p.removed {
+		if !p.removed && !p.joining {
 			out = append(out, p)
 		}
 	}
@@ -331,16 +332,22 @@ func (h *harness) addMember() {
 	for _, q := range h.live() {
 		peers = append(peers, q.id+"="+q.raft)
 	}
-	p.peers, p.join = strings.Join(peers, ","), true
+	p.peers, p.join, p.joining = strings.Join(peers, ","), true, true
 	h.mu.Lock()
 	h.start(p)
 	h.procs = append(h.procs, p)
 	h.mu.Unlock()
 	if h.changeMembers("ADDLEARNER", p.id, p.raft) && h.changeMembers("PROMOTE", p.id) {
+		h.mu.Lock()
+		p.joining = false
+		h.mu.Unlock()
 		h.stats.added++
 		return
 	}
 	h.stats.addFailed++
+	h.t.Logf("adding %s failed, removing it again", p.id)
+	h.changeMembers("REMOVE", p.id)
+	h.retire(p.id)
 }
 
 func (h *harness) removeMember(voters []string) {
@@ -350,6 +357,10 @@ func (h *harness) removeMember(voters []string) {
 		return
 	}
 	h.stats.removed++
+	h.retire(id)
+}
+
+func (h *harness) retire(id string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, p := range h.procs {
