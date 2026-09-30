@@ -91,7 +91,7 @@ func (p *respPool) doWithin(addr string, timeout time.Duration, cmds ...[]string
 	if err != nil {
 		return nil, err
 	}
-	c.SetDeadline(time.Now().Add(timeout))
+	_ = c.SetDeadline(time.Now().Add(timeout))
 	var b strings.Builder
 	for _, args := range cmds {
 		fmt.Fprintf(&b, "*%d\r\n", len(args))

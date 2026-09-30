@@ -61,11 +61,14 @@ func openDataFile(dir string, id uint32) (*dataFile, error) {
 
 func (df *dataFile) close() error {
 	df.mem.Store(nil)
+	var err error
 	if df.mm != nil {
-		munmap(df.mm)
+		err = munmap(df.mm)
 		df.mm = nil
 	}
-	err := df.f.Close()
+	if cerr := df.f.Close(); err == nil {
+		err = cerr
+	}
 	for _, r := range df.readers {
 		r.Close()
 	}

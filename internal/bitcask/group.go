@@ -234,7 +234,7 @@ func (g *logGroup) waitWritten(seq uint64) error {
 		g.wmu.Lock()
 		g.writing = false
 		if err != nil {
-			g.db.fail(err)
+			_ = g.db.fail(err)
 		} else if len(batches) > 0 {
 			g.written = batches[len(batches)-1].seq
 		}

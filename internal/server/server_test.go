@@ -79,7 +79,7 @@ func startServerWith(t testing.TB, dir string, cfg Config) (*Server, *bitcask.DB
 		t.Fatal(err)
 	}
 	srv := New(db, cfg)
-	go srv.Serve(ln)
+	go func() { _ = srv.Serve(ln) }()
 	return srv, db, ln.Addr().String()
 }
 
@@ -97,7 +97,7 @@ func dial(t *testing.T, addr string) *testConn {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 	t.Cleanup(func() { conn.Close() })
 	return &testConn{t: t, conn: conn, r: bufio.NewReader(conn)}
 }
@@ -402,7 +402,7 @@ func TestConcurrentClients(t *testing.T) {
 				return
 			}
 			defer conn.Close()
-			conn.SetDeadline(time.Now().Add(10 * time.Second))
+			_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 			if _, err := io.WriteString(conn, strings.Repeat(encode("INCR", "counter"), 100)); err != nil {
 				t.Error(err)
 				return

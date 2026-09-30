@@ -170,9 +170,10 @@ func follower(nodes []*testNode, l *testNode) *testNode {
 
 func get(tn *testNode, key string) string {
 	var v []byte
-	tn.db.View(bitcask.Keys(key), func(tx *bitcask.Tx) error {
-		v, _, _ = tx.Get(key)
-		return nil
+	_ = tn.db.View(bitcask.Keys(key), func(tx *bitcask.Tx) error {
+		var err error
+		v, _, err = tx.Get(key)
+		return err
 	})
 	return string(v)
 }
@@ -362,13 +363,11 @@ func TestHotKeyFailover(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for {
-				switch err := incr(l, "counter"); {
-				case err == nil:
-					acked.Add(1)
-				default:
+				if err := incr(l, "counter"); err != nil {
 					failed.Add(1)
 					return
 				}
+				acked.Add(1)
 			}
 		}()
 	}

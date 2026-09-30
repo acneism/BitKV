@@ -58,13 +58,6 @@ func (r stringsReply) writeTo(w *resp.Writer) {
 	}
 }
 
-func boolReply(b bool) intReply {
-	if b {
-		return 1
-	}
-	return 0
-}
-
 func storageError(err error) errorReply {
 	switch {
 	case errors.Is(err, replica.ErrNotLeader):

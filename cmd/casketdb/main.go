@@ -97,8 +97,7 @@ func run(logger *slog.Logger, cfg config) error {
 	var rep *replica.Node
 	if cfg.raftID != "" {
 		if rep, err = openReplica(cfg, db); err != nil {
-			db.Close()
-			return err
+			return errors.Join(err, db.Close())
 		}
 		logger.Info("raft started", "id", cfg.raftID, "peers", cfg.raftPeers)
 		warnIfShared(logger, cfg.raftDir)
@@ -112,8 +111,7 @@ func run(logger *slog.Logger, cfg config) error {
 
 	ln, err := net.Listen("tcp", cfg.addr)
 	if err != nil {
-		closeStore(rep, db)
-		return err
+		return errors.Join(err, closeStore(rep, db))
 	}
 	if cfg.requirePass == "" && !isLoopback(ln.Addr()) {
 		logger.Warn("listening on a non-loopback address without a password; set -requirepass", "addr", ln.Addr().String())

@@ -26,7 +26,7 @@ func dialBench(addr string) (net.Conn, *bufio.Reader, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	conn.SetDeadline(time.Now().Add(5 * time.Minute))
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Minute))
 	return conn, bufio.NewReader(conn), nil
 }
 

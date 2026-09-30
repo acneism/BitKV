@@ -158,7 +158,7 @@ func TestReady(t *testing.T) {
 	}
 	for _, tt := range tests {
 		r := NewReader(strings.NewReader(tt.in), 1<<20)
-		r.br.Peek(len(tt.in))
+		_, _ = r.br.Peek(len(tt.in))
 		if got := r.Ready(); got != tt.want {
 			t.Fatalf("Ready(%q) = %v, want %v", tt.in, got, tt.want)
 		}

@@ -82,9 +82,9 @@ func Open(dir string, opts Options) (*DB, error) {
 	db := &DB{dir: dir, opts: opts, lock: lock, kd: newKeydir(), stop: make(chan struct{})}
 	if err := db.open(); err != nil {
 		for _, g := range db.groups {
-			g.closeFiles()
+			_ = g.closeFiles()
 		}
-		lock.unlock()
+		_ = lock.unlock()
 		return nil, err
 	}
 	db.startBackground()
@@ -177,7 +177,7 @@ func (db *DB) Close() error {
 				break
 			}
 			if err = g.active.f.Sync(); err != nil {
-				db.fail(err)
+				err = db.fail(err)
 				break
 			}
 		}

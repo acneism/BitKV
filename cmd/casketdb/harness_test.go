@@ -74,15 +74,11 @@ func freePorts(t *testing.T, n int) []string {
 
 func buildBinary(t *testing.T) string {
 	t.Helper()
-	goBin, err := exec.LookPath("go")
-	if err != nil {
-		goBin = filepath.Join(runtime.GOROOT(), "bin", "go")
-	}
 	bin := filepath.Join(t.TempDir(), "casketdb")
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	if out, err := exec.Command(goBin, "build", "-o", bin, ".").CombinedOutput(); err != nil {
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 	return bin
@@ -160,8 +156,8 @@ func (h *harness) start(p *proc) {
 }
 
 func (h *harness) kill(p *proc) {
-	p.cmd.Process.Kill()
-	p.cmd.Wait()
+	_ = p.cmd.Process.Kill()
+	_ = p.cmd.Wait()
 	p.cmd = nil
 	h.pool.drop(p.client)
 }

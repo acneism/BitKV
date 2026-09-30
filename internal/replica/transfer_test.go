@@ -87,11 +87,11 @@ func TestNoOpWriteWaitsForTheProposalItRead(t *testing.T) {
 	}()
 	eventually(t, "the delete to be proposed", func() bool {
 		gone := false
-		l.db.Propose(bitcask.Keys("k"), l.node.ready.Load(), func(tx *bitcask.Tx) error {
+		_, err := l.db.Propose(bitcask.Keys("k"), l.node.ready.Load(), func(tx *bitcask.Tx) error {
 			gone = !tx.Exists("k")
 			return nil
 		}, nil)
-		return gone
+		return err == nil && gone
 	})
 	existed := true
 	err := l.node.Update(bitcask.Keys("k"), func(tx *bitcask.Tx) error {

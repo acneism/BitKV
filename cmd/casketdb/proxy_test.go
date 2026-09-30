@@ -65,9 +65,9 @@ func readHello(r io.Reader) ([]byte, string, error) {
 }
 
 func (lp *linkProxy) serve(in net.Conn, to, target string) {
-	in.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = in.SetReadDeadline(time.Now().Add(5 * time.Second))
 	hello, from, err := readHello(in)
-	in.SetReadDeadline(time.Time{})
+	_ = in.SetReadDeadline(time.Time{})
 	if err != nil {
 		in.Close()
 		return
@@ -89,10 +89,10 @@ func (lp *linkProxy) serve(in net.Conn, to, target string) {
 	lp.mu.Unlock()
 	if _, err := out.Write(hello); err == nil {
 		go func() {
-			io.Copy(in, out)
+			_, _ = io.Copy(in, out)
 			in.Close()
 		}()
-		io.Copy(out, in)
+		_, _ = io.Copy(out, in)
 	}
 	in.Close()
 	out.Close()

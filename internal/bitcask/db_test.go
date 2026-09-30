@@ -66,7 +66,9 @@ func increment(tx *Tx, key string) error {
 	}
 	n := 0
 	if len(v) > 0 {
-		fmt.Sscan(string(v), &n)
+		if _, err := fmt.Sscan(string(v), &n); err != nil {
+			return err
+		}
 	}
 	tx.Put(key, []byte(fmt.Sprint(n+1)), 0)
 	return nil
@@ -967,7 +969,9 @@ func TestParallelWritersAndGlobalReaders(t *testing.T) {
 		for i := range 16 {
 			v, _ := get(t, db, fmt.Sprintf("shared:%d", i))
 			n := 0
-			fmt.Sscan(v, &n)
+			if _, err := fmt.Sscan(v, &n); err != nil {
+				t.Fatalf("shared:%d = %q: %v", i, v, err)
+			}
 			total += n
 		}
 		if total != writers*perWriter {
@@ -1184,7 +1188,7 @@ func TestProposeReportsWhatTheOutcomeDependsOn(t *testing.T) {
 		t.Fatalf("a no-op write after a proposal depends on %d, %v; want 11", index, err)
 	}
 	failed := errors.New("wrong type")
-	if index, err := propose(7, func(tx *Tx) error { tx.Get("k"); return failed }); err != failed || index != 11 {
+	if index, err := propose(7, func(tx *Tx) error { tx.Exists("k"); return failed }); err != failed || index != 11 {
 		t.Fatalf("a failed write that read a proposal depends on %d, %v; want 11", index, err)
 	}
 	if index, _ := propose(8, read); index != 0 {
