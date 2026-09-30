@@ -78,7 +78,7 @@ wsl ./fault.test -test.run TestFaults -test.timeout 30m -fault.duration=5m -faul
 
 The [nightly workflow](.github/workflows/nightly.yml), which can also be started by hand, runs `TestFaults` with linearizable reads, `TestFaults` with lease reads and `TestMembershipChanges`, ten minutes each. A failed run keeps the node logs and the Porcupine visualization as build artifacts.
 
-`main` is protected: changes reach it only through a pull request whose CI run is green and whose branch is up to date with `main`.
+`main` is protected: a commit lands there only after CI has passed on it, on a branch that is up to date with `main`. Push a branch, open a pull request, wait for a green run, then merge.
 
 ### Benchmarks
 
