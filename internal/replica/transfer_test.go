@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/acneism/casketdb/internal/bitcask"
-	"github.com/acneism/raft/node"
 )
 
 func leaderOf(nodes []*testNode) *testNode {
@@ -71,9 +70,7 @@ func TestTransferLeadershipErrors(t *testing.T) {
 }
 
 func TestNoOpWriteWaitsForTheProposalItRead(t *testing.T) {
-	nodes := newCluster(t, 3, false, func(tn *testNode) {
-		tn.tune = func(c *node.Config) { c.ElectionTicks = 500 }
-	})
+	nodes := newCluster(t, 3, false)
 	l := leader(t, nodes)
 	must(t, put(l, "k", "v"))
 	for _, tn := range nodes {
