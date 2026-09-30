@@ -2,6 +2,12 @@
 
 Versions are listed newest first. CasketDB was called BitKV up to and including v0.9.
 
+## v0.11.1 — 2026-09-30
+
+### Changed
+
+- Internal cleanup: duplicated code is gone and several code paths are simpler. Behavior, the data format and the wire protocol between nodes are unchanged, and nodes of v0.11.0 and v0.11.1 can run in one cluster.
+
 ## v0.11 — 2026-09-28
 
 ### Added
