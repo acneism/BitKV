@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 )
 
 type relocation struct {
@@ -63,12 +62,11 @@ func (g *logGroup) beginMerge() ([]*dataFile, uint32, uint32, error) {
 		return nil, 0, 0, err
 	}
 	g.filesMu.RLock()
-	inputs := make([]*dataFile, 0, len(g.files))
-	for _, df := range g.files {
-		inputs = append(inputs, df)
+	var inputs []*dataFile
+	for _, id := range g.sortedIDsLocked() {
+		inputs = append(inputs, g.files[id])
 	}
 	g.filesMu.RUnlock()
-	slices.SortFunc(inputs, func(a, b *dataFile) int { return int(a.id) - int(b.id) })
 	boundary := g.active.id
 	reserve := uint32(len(inputs))
 	if err := g.rotateLocked(boundary + reserve + 1); err != nil {

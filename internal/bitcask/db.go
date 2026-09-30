@@ -8,7 +8,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -338,12 +337,7 @@ func (db *DB) LinkFiles(dir string) (int, []SnapshotFile, error) {
 	for _, g := range db.groups {
 		g.filesMu.RLock()
 		defer g.filesMu.RUnlock()
-		ids := make([]uint32, 0, len(g.files))
-		for id := range g.files {
-			ids = append(ids, id)
-		}
-		slices.Sort(ids)
-		for _, id := range ids {
+		for _, id := range g.sortedIDsLocked() {
 			size := g.files[id].written.Load()
 			if size == 0 {
 				continue
@@ -381,6 +375,13 @@ func linkOrCopy(src, dst string, size int64) error {
 	}
 	if os.Link(src, dst) == nil {
 		return nil
+	}
+	return CopyPrefix(src, dst, size)
+}
+
+func CopyPrefix(src, dst string, size int64) error {
+	if err := os.MkdirAll(filepath.Dir(dst), dirMode); err != nil {
+		return err
 	}
 	in, err := os.Open(src)
 	if err != nil {

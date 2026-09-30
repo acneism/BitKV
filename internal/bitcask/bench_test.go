@@ -10,11 +10,12 @@ import (
 
 const benchKeys = 100000
 
-func benchDB(b *testing.B, policy SyncPolicy) *DB {
+func benchDB(b *testing.B, policy SyncPolicy, logs int) *DB {
 	b.Helper()
 	o := DefaultOptions()
 	o.Sync = policy
 	o.MergeInterval = 0
+	o.Logs = logs
 	db, err := Open(b.TempDir(), o)
 	if err != nil {
 		b.Fatal(err)
@@ -24,17 +25,27 @@ func benchDB(b *testing.B, policy SyncPolicy) *DB {
 }
 
 func benchPut(b *testing.B, db *DB, key string, value []byte) {
-	err := db.Update(Keys(key), func(tx *Tx) error {
-		tx.Put(key, value, 0)
-		return nil
-	})
-	if err != nil {
+	if err := write(db, key, value, 0); err != nil {
 		b.Fatal(err)
 	}
 }
 
+func benchParallelPuts(b *testing.B, db *DB) {
+	value := bytes.Repeat([]byte("v"), 100)
+	var n atomic.Int64
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if err := write(db, "key:"+strconv.FormatInt(n.Add(1)%benchKeys, 10), value, 0); err != nil {
+				b.Error(err)
+				return
+			}
+		}
+	})
+}
+
 func BenchmarkPut(b *testing.B) {
-	db := benchDB(b, SyncNo)
+	db := benchDB(b, SyncNo, 0)
 	value := bytes.Repeat([]byte("v"), 100)
 	b.SetBytes(int64(len(value)))
 	b.ResetTimer()
@@ -44,7 +55,7 @@ func BenchmarkPut(b *testing.B) {
 }
 
 func BenchmarkPutSyncAlways(b *testing.B) {
-	db := benchDB(b, SyncAlways)
+	db := benchDB(b, SyncAlways, 0)
 	value := bytes.Repeat([]byte("v"), 100)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -53,60 +64,21 @@ func BenchmarkPutSyncAlways(b *testing.B) {
 }
 
 func BenchmarkPutSyncAlwaysParallel(b *testing.B) {
-	db := benchDB(b, SyncAlways)
-	value := bytes.Repeat([]byte("v"), 100)
-	var n atomic.Int64
+	db := benchDB(b, SyncAlways, 0)
 	b.SetParallelism(16)
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			key := "key:" + strconv.FormatInt(n.Add(1)%benchKeys, 10)
-			err := db.Update(Keys(key), func(tx *Tx) error {
-				tx.Put(key, value, 0)
-				return nil
-			})
-			if err != nil {
-				b.Error(err)
-				return
-			}
-		}
-	})
+	benchParallelPuts(b, db)
 }
 
 func BenchmarkPutParallel(b *testing.B) {
 	for _, logs := range []int{1, 4, 8} {
 		b.Run("logs="+strconv.Itoa(logs), func(b *testing.B) {
-			o := DefaultOptions()
-			o.Sync = SyncNo
-			o.MergeInterval = 0
-			o.Logs = logs
-			db, err := Open(b.TempDir(), o)
-			if err != nil {
-				b.Fatal(err)
-			}
-			b.Cleanup(func() { db.Close() })
-			value := bytes.Repeat([]byte("v"), 100)
-			var n atomic.Int64
-			b.ResetTimer()
-			b.RunParallel(func(pb *testing.PB) {
-				for pb.Next() {
-					key := "key:" + strconv.FormatInt(n.Add(1)%benchKeys, 10)
-					err := db.Update(Keys(key), func(tx *Tx) error {
-						tx.Put(key, value, 0)
-						return nil
-					})
-					if err != nil {
-						b.Error(err)
-						return
-					}
-				}
-			})
+			benchParallelPuts(b, benchDB(b, SyncNo, logs))
 		})
 	}
 }
 
 func BenchmarkCrossLogPairParallel(b *testing.B) {
-	db := benchDB(b, SyncNo)
+	db := benchDB(b, SyncNo, 0)
 	value := bytes.Repeat([]byte("v"), 100)
 	var n atomic.Int64
 	b.ResetTimer()
@@ -139,10 +111,7 @@ func BenchmarkMixedParallel(b *testing.B) {
 			key := "key:" + strconv.Itoa(rng.IntN(benchKeys))
 			var err error
 			if rng.IntN(10) == 0 {
-				err = db.Update(Keys(key), func(tx *Tx) error {
-					tx.Put(key, value, 0)
-					return nil
-				})
+				err = write(db, key, value, 0)
 			} else {
 				err = db.View(Keys(key), func(tx *Tx) error {
 					_, _, err := tx.Get(key)
@@ -158,7 +127,7 @@ func BenchmarkMixedParallel(b *testing.B) {
 }
 
 func BenchmarkIncrParallel(b *testing.B) {
-	db := benchDB(b, SyncNo)
+	db := benchDB(b, SyncNo, 0)
 	var n atomic.Int64
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -183,7 +152,7 @@ func BenchmarkIncrParallel(b *testing.B) {
 
 func loadedDB(b *testing.B) *DB {
 	b.Helper()
-	db := benchDB(b, SyncNo)
+	db := benchDB(b, SyncNo, 0)
 	value := bytes.Repeat([]byte("v"), 100)
 	for i := range benchKeys {
 		benchPut(b, db, "key:"+strconv.Itoa(i), value)

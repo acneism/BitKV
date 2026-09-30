@@ -128,7 +128,7 @@ func (f *bitcaskFSM) Restore(src node.SnapshotSource) error {
 	}
 	defer os.RemoveAll(tmp)
 	for _, sf := range files {
-		if err := copyPrefix(filepath.Join(src.Dir, filepath.FromSlash(sf.Path)), filepath.Join(tmp, filepath.FromSlash(sf.Path)), sf.Size); err != nil {
+		if err := bitcask.CopyPrefix(filepath.Join(src.Dir, filepath.FromSlash(sf.Path)), filepath.Join(tmp, filepath.FromSlash(sf.Path)), sf.Size); err != nil {
 			return err
 		}
 	}
@@ -294,26 +294,6 @@ func writeSync(path string, b []byte) error {
 		err = file.Sync()
 	}
 	if cerr := file.Close(); err == nil {
-		err = cerr
-	}
-	return err
-}
-
-func copyPrefix(from, to string, size int64) error {
-	if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
-		return err
-	}
-	in, err := os.Open(from)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(to, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	_, err = io.CopyN(out, in, size)
-	if cerr := out.Close(); err == nil {
 		err = cerr
 	}
 	return err

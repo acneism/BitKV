@@ -57,37 +57,27 @@ func openReaders(path string) ([]*os.File, error) {
 }
 
 func readFull(f *os.File, b []byte, off int64) error {
+	return transferAt(f, b, off, syscall.ReadFile, io.ErrUnexpectedEOF)
+}
+
+func writeFull(f *os.File, b []byte, off int64) error {
+	return transferAt(f, b, off, syscall.WriteFile, io.ErrShortWrite)
+}
+
+func transferAt(f *os.File, b []byte, off int64, op func(syscall.Handle, []byte, *uint32, *syscall.Overlapped) error, short error) error {
 	h := syscall.Handle(f.Fd())
 	for len(b) > 0 {
 		chunk := b[:min(len(b), maxIOChunk)]
 		o := syscall.Overlapped{Offset: uint32(off), OffsetHigh: uint32(off >> 32)}
 		var n uint32
-		if err := syscall.ReadFile(h, chunk, &n, &o); err != nil {
+		if err := op(h, chunk, &n, &o); err != nil {
 			if err == syscall.ERROR_HANDLE_EOF {
-				return io.ErrUnexpectedEOF
+				return short
 			}
 			return err
 		}
 		if n == 0 {
-			return io.ErrUnexpectedEOF
-		}
-		b = b[n:]
-		off += int64(n)
-	}
-	return nil
-}
-
-func writeFull(f *os.File, b []byte, off int64) error {
-	h := syscall.Handle(f.Fd())
-	for len(b) > 0 {
-		chunk := b[:min(len(b), maxIOChunk)]
-		o := syscall.Overlapped{Offset: uint32(off), OffsetHigh: uint32(off >> 32)}
-		var n uint32
-		if err := syscall.WriteFile(h, chunk, &n, &o); err != nil {
-			return err
-		}
-		if n == 0 {
-			return io.ErrShortWrite
+			return short
 		}
 		b = b[n:]
 		off += int64(n)

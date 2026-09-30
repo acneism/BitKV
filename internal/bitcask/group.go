@@ -3,6 +3,7 @@ package bitcask
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -187,12 +188,11 @@ func (g *logGroup) dropFileLocked(id uint32) {
 func (g *logGroup) fileIDs() []uint32 {
 	g.filesMu.RLock()
 	defer g.filesMu.RUnlock()
-	ids := make([]uint32, 0, len(g.files))
-	for id := range g.files {
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
-	return ids
+	return g.sortedIDsLocked()
+}
+
+func (g *logGroup) sortedIDsLocked() []uint32 {
+	return slices.Sorted(maps.Keys(g.files))
 }
 
 func (g *logGroup) dataFiles() int {

@@ -13,13 +13,21 @@ import (
 
 func benchConn(b *testing.B, addr string) (net.Conn, *bufio.Reader) {
 	b.Helper()
-	conn, err := net.Dial("tcp", addr)
+	conn, r, err := dialBench(addr)
 	if err != nil {
 		b.Fatal(err)
 	}
-	conn.SetDeadline(time.Now().Add(5 * time.Minute))
 	b.Cleanup(func() { conn.Close() })
-	return conn, bufio.NewReader(conn)
+	return conn, r
+}
+
+func dialBench(addr string) (net.Conn, *bufio.Reader, error) {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return nil, nil, err
+	}
+	conn.SetDeadline(time.Now().Add(5 * time.Minute))
+	return conn, bufio.NewReader(conn), nil
 }
 
 func readLines(r *bufio.Reader, n int) error {
@@ -97,13 +105,12 @@ func BenchmarkServerParallelPipelinedSet(b *testing.B) {
 	var worker atomic.Int64
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		conn, err := net.Dial("tcp", addr)
+		conn, r, err := dialBench(addr)
 		if err != nil {
 			b.Error(err)
 			return
 		}
 		defer conn.Close()
-		r := bufio.NewReader(conn)
 		id := worker.Add(1)
 		payload := pipelinePayload(func(i int) string {
 			return encode("SET", "w"+strconv.FormatInt(id, 10)+":"+strconv.Itoa(i), strings.Repeat("v", 100))
@@ -134,13 +141,12 @@ func BenchmarkServerParallelSet(b *testing.B) {
 	b.SetParallelism(8)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		conn, err := net.Dial("tcp", addr)
+		conn, r, err := dialBench(addr)
 		if err != nil {
 			b.Error(err)
 			return
 		}
 		defer conn.Close()
-		r := bufio.NewReader(conn)
 		i := 0
 		for pb.Next() {
 			i++

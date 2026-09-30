@@ -45,15 +45,58 @@ func mustClose(t *testing.T, db *DB) {
 	}
 }
 
-func put(t *testing.T, db *DB, key, value string, expireAt int64) {
-	t.Helper()
-	err := db.Update(Keys(key), func(tx *Tx) error {
-		tx.Put(key, []byte(value), expireAt)
+func write(db *DB, key string, value []byte, expireAt int64) error {
+	return db.Update(Keys(key), func(tx *Tx) error {
+		tx.Put(key, value, expireAt)
 		return nil
 	})
-	if err != nil {
+}
+
+func put(t *testing.T, db *DB, key, value string, expireAt int64) {
+	t.Helper()
+	if err := write(db, key, []byte(value), expireAt); err != nil {
 		t.Fatalf("put %q: %v", key, err)
 	}
+}
+
+func increment(tx *Tx, key string) error {
+	v, _, err := tx.Get(key)
+	if err != nil {
+		return err
+	}
+	n := 0
+	if len(v) > 0 {
+		fmt.Sscan(string(v), &n)
+	}
+	tx.Put(key, []byte(fmt.Sprint(n+1)), 0)
+	return nil
+}
+
+func inParallel(t *testing.T, workers int, fn func(worker int) error) {
+	t.Helper()
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for w := range workers {
+		wg.Go(func() {
+			if err := fn(w); err != nil {
+				errs <- err
+			}
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+}
+
+func checkAcrossRestart(t *testing.T, db *DB, dir string, o Options, check func(*DB)) {
+	t.Helper()
+	check(db)
+	mustClose(t, db)
+	db = mustOpen(t, dir, o)
+	defer mustClose(t, db)
+	check(db)
 }
 
 func del(t *testing.T, db *DB, key string) bool {
@@ -425,11 +468,7 @@ func TestMergeWithConcurrentWrites(t *testing.T) {
 		for i := range 3000 {
 			key := fmt.Sprintf("k%d", i%64)
 			value := fmt.Sprintf("v%d", i)
-			err := db.Update(Keys(key), func(tx *Tx) error {
-				tx.Put(key, []byte(value), 0)
-				return nil
-			})
-			if err != nil {
+			if err := write(db, key, []byte(value), 0); err != nil {
 				done <- err
 				return
 			}
@@ -466,11 +505,7 @@ func TestMergeWithConcurrentWrites(t *testing.T) {
 			t.Fatalf("len = %d, want %d", db.Len(), len(model))
 		}
 	}
-	verify(db)
-	mustClose(t, db)
-	db = mustOpen(t, dir, testOptions())
-	defer mustClose(t, db)
-	verify(db)
+	checkAcrossRestart(t, db, dir, testOptions(), verify)
 }
 
 func TestMergeCompletesAfterCrash(t *testing.T) {
@@ -722,36 +757,19 @@ func TestSyncAlwaysConcurrentWriters(t *testing.T) {
 	o := testOptions()
 	o.Sync = SyncAlways
 	db := mustOpen(t, dir, o)
-	var wg sync.WaitGroup
-	errs := make(chan error, 8)
-	for g := range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := range 50 {
-				key := fmt.Sprintf("g%d-%d", g, i)
-				err := db.Update(Keys(key), func(tx *Tx) error {
-					tx.Put(key, []byte("v"), 0)
-					return nil
-				})
-				if err != nil {
-					errs <- err
-					return
-				}
+	inParallel(t, 8, func(g int) error {
+		for i := range 50 {
+			if err := write(db, fmt.Sprintf("g%d-%d", g, i), []byte("v"), 0); err != nil {
+				return err
 			}
-		}()
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		t.Fatal(err)
-	}
-	mustClose(t, db)
-	db = mustOpen(t, dir, o)
-	defer mustClose(t, db)
-	if n := db.Len(); n != 400 {
-		t.Fatalf("len = %d, want 400", n)
-	}
+		}
+		return nil
+	})
+	checkAcrossRestart(t, db, dir, o, func(db *DB) {
+		if n := db.Len(); n != 400 {
+			t.Fatalf("len = %d, want 400", n)
+		}
+	})
 }
 
 func TestConcurrentReadModifyWrite(t *testing.T) {
@@ -761,49 +779,23 @@ func TestConcurrentReadModifyWrite(t *testing.T) {
 			o := testOptions()
 			o.Sync = policy
 			db := mustOpen(t, dir, o)
-			var wg sync.WaitGroup
-			errs := make(chan error, 8)
-			for g := range 8 {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					for i := range 150 {
-						key := fmt.Sprintf("counter%d", (g+i)%4)
-						err := db.Update(Keys(key), func(tx *Tx) error {
-							v, _, err := tx.Get(key)
-							if err != nil {
-								return err
-							}
-							n := 0
-							if len(v) > 0 {
-								fmt.Sscan(string(v), &n)
-							}
-							tx.Put(key, []byte(fmt.Sprint(n+1)), 0)
-							return nil
-						})
-						if err != nil {
-							errs <- err
-							return
-						}
+			inParallel(t, 8, func(g int) error {
+				for i := range 150 {
+					key := fmt.Sprintf("counter%d", (g+i)%4)
+					err := db.Update(Keys(key), func(tx *Tx) error {
+						return increment(tx, key)
+					})
+					if err != nil {
+						return err
 					}
-				}()
-			}
-			wg.Wait()
-			close(errs)
-			for err := range errs {
-				t.Fatal(err)
-			}
-			check := func(db *DB) {
-				t.Helper()
+				}
+				return nil
+			})
+			checkAcrossRestart(t, db, dir, o, func(db *DB) {
 				for k := range 4 {
 					expect(t, db, fmt.Sprintf("counter%d", k), "300")
 				}
-			}
-			check(db)
-			mustClose(t, db)
-			db = mustOpen(t, dir, o)
-			defer mustClose(t, db)
-			check(db)
+			})
 		})
 	}
 }
@@ -815,25 +807,14 @@ func TestGroupCommitSharesFsyncs(t *testing.T) {
 	db := mustOpen(t, t.TempDir(), o)
 	defer mustClose(t, db)
 	const writers, perWriter = 16, 30
-	var wg sync.WaitGroup
-	for g := range writers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := range perWriter {
-				key := fmt.Sprintf("g%d-%d", g, i)
-				err := db.Update(Keys(key), func(tx *Tx) error {
-					tx.Put(key, []byte("v"), 0)
-					return nil
-				})
-				if err != nil {
-					t.Error(err)
-					return
-				}
+	inParallel(t, writers, func(g int) error {
+		for i := range perWriter {
+			if err := write(db, fmt.Sprintf("g%d-%d", g, i), []byte("v"), 0); err != nil {
+				return err
 			}
-		}()
-	}
-	wg.Wait()
+		}
+		return nil
+	})
 	st := db.Stats()
 	t.Logf("%d commits, %d writes, %d fsyncs", writers*perWriter, st.Writes, st.Fsyncs)
 	if st.Fsyncs >= writers*perWriter || st.Writes >= writers*perWriter {
@@ -945,38 +926,9 @@ func TestParallelWritersAndGlobalReaders(t *testing.T) {
 	o.Logs = 4
 	db := mustOpen(t, dir, o)
 	const writers, perWriter = 8, 300
-	var wg sync.WaitGroup
-	for g := range writers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := range perWriter {
-				a, b := fmt.Sprintf("w%d:%d", g, i), fmt.Sprintf("shared:%d", i%16)
-				err := db.Update(Keys(a, b), func(tx *Tx) error {
-					v, _, err := tx.Get(b)
-					if err != nil {
-						return err
-					}
-					n := 0
-					if len(v) > 0 {
-						fmt.Sscan(string(v), &n)
-					}
-					tx.Put(a, []byte("v"), 0)
-					tx.Put(b, []byte(fmt.Sprint(n+1)), 0)
-					return nil
-				})
-				if err != nil {
-					t.Error(err)
-					return
-				}
-			}
-		}()
-	}
 	stop := make(chan struct{})
 	var readers sync.WaitGroup
-	readers.Add(1)
-	go func() {
-		defer readers.Done()
+	readers.Go(func() {
 		for {
 			select {
 			case <-stop:
@@ -991,12 +943,23 @@ func TestParallelWritersAndGlobalReaders(t *testing.T) {
 				return
 			}
 		}
-	}()
-	wg.Wait()
+	})
+	inParallel(t, writers, func(g int) error {
+		for i := range perWriter {
+			a, b := fmt.Sprintf("w%d:%d", g, i), fmt.Sprintf("shared:%d", i%16)
+			err := db.Update(Keys(a, b), func(tx *Tx) error {
+				tx.Put(a, []byte("v"), 0)
+				return increment(tx, b)
+			})
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	close(stop)
 	readers.Wait()
-	check := func(db *DB) {
-		t.Helper()
+	checkAcrossRestart(t, db, dir, o, func(db *DB) {
 		if n := db.Len(); n != writers*perWriter+16 {
 			t.Fatalf("len = %d, want %d", n, writers*perWriter+16)
 		}
@@ -1010,12 +973,7 @@ func TestParallelWritersAndGlobalReaders(t *testing.T) {
 		if total != writers*perWriter {
 			t.Fatalf("shared counters sum to %d, want %d", total, writers*perWriter)
 		}
-	}
-	check(db)
-	mustClose(t, db)
-	db = mustOpen(t, dir, o)
-	defer mustClose(t, db)
-	check(db)
+	})
 }
 
 func TestReadOnlyTxRejectsWrites(t *testing.T) {
@@ -1141,11 +1099,7 @@ func TestReadsServedFromMemory(t *testing.T) {
 	if err := db.Merge(); err != nil {
 		t.Fatal(err)
 	}
-	check(db)
-	mustClose(t, db)
-	db = mustOpen(t, dir, testOptions())
-	defer mustClose(t, db)
-	check(db)
+	checkAcrossRestart(t, db, dir, testOptions(), check)
 }
 
 func TestProposedWritesVisibility(t *testing.T) {

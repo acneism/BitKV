@@ -358,21 +358,30 @@ func (tx *Tx) Version(key string) Version {
 	return Version{exists: true, fileID: e.fileID, offset: e.offset}
 }
 
+func (tx *Tx) global() bool {
+	if tx.all || tx.shardwise {
+		return true
+	}
+	tx.err = ErrNotLocked
+	return false
+}
+
+func (tx *Tx) readShard(i int, fn func(s *shard)) {
+	s := &tx.db.kd.shards[i]
+	if tx.shardwise {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+	}
+	fn(s)
+}
+
 func (tx *Tx) Len() int {
-	if !tx.all && !tx.shardwise {
-		tx.err = ErrNotLocked
+	if !tx.global() {
 		return 0
 	}
 	n := 0
 	for i := range tx.db.kd.shards {
-		s := &tx.db.kd.shards[i]
-		if tx.shardwise {
-			s.mu.RLock()
-		}
-		n += s.count
-		if tx.shardwise {
-			s.mu.RUnlock()
-		}
+		tx.readShard(i, func(s *shard) { n += s.count })
 	}
 	for _, key := range tx.order {
 		_, stored := tx.db.kd.shard(key).m[key]
@@ -388,8 +397,7 @@ func (tx *Tx) Len() int {
 }
 
 func (tx *Tx) Scan(cursor uint64, count int, match func(string) bool) (uint64, []string) {
-	if !tx.all && !tx.shardwise {
-		tx.err = ErrNotLocked
+	if !tx.global() {
 		return 0, nil
 	}
 	if count <= 0 {
@@ -399,33 +407,28 @@ func (tx *Tx) Scan(cursor uint64, count int, match func(string) bool) (uint64, [
 	examined := 0
 	i := cursor
 	for ; i < numShards && examined < count; i++ {
-		s := &tx.db.kd.shards[i]
-		if tx.shardwise {
-			s.mu.RLock()
-		}
-		for key := range s.m {
-			examined++
-			visible := false
-			if op, ok := tx.pending[key]; ok {
-				visible = !op.deleted
-			} else {
-				_, visible = tx.stored(s, key)
+		tx.readShard(int(i), func(s *shard) {
+			for key := range s.m {
+				examined++
+				visible := false
+				if op, ok := tx.pending[key]; ok {
+					visible = !op.deleted
+				} else {
+					_, visible = tx.stored(s, key)
+				}
+				if visible && (match == nil || match(key)) {
+					keys = append(keys, key)
+				}
 			}
-			if visible && (match == nil || match(key)) {
-				keys = append(keys, key)
+			for _, key := range tx.order {
+				if shardIndex(key) != int(i) || tx.pending[key].deleted {
+					continue
+				}
+				if _, ok := s.m[key]; !ok && (match == nil || match(key)) {
+					keys = append(keys, key)
+				}
 			}
-		}
-		for _, key := range tx.order {
-			if shardIndex(key) != int(i) || tx.pending[key].deleted {
-				continue
-			}
-			if _, ok := s.m[key]; !ok && (match == nil || match(key)) {
-				keys = append(keys, key)
-			}
-		}
-		if tx.shardwise {
-			s.mu.RUnlock()
-		}
+		})
 	}
 	if i >= numShards {
 		return 0, keys
