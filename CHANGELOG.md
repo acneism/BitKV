@@ -8,7 +8,7 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 
 - TLS for clients: `-tls-addr` with `-tls-cert` and `-tls-key` opens a listener for TLS 1.2 and 1.3 next to `-addr`, and `-tls-ca` makes clients present a certificate. The certificate is read again when its file changes. `-addr ""` turns plain text off. See [TLS for clients](docs/configuration.md#tls-for-clients).
 - A warning when clients on a non-loopback `-addr` send the password in plain text.
-- ACL users: `ACL SETUSER`, `GETUSER`, `DELUSER`, `LIST`, `USERS`, `WHOAMI`, `CAT` and `LOG`, `AUTH <user> <password>`, permissions by command, category and key pattern, `NOPERM` replies. Users are stored in the data directory and, in a cluster, replicated through Raft; `CONFIG SET requirepass` is now stored and replicated too. See [access control](docs/commands.md#access-control).
+- ACL users: `ACL SETUSER`, `GETUSER`, `DELUSER`, `LIST`, `USERS`, `WHOAMI`, `CAT` and `LOG`, `AUTH <user> <password>`, permissions by command, category and key pattern, `NOPERM` replies. Users are stored in the data directory and, in a cluster, replicated through Raft; `CONFIG SET requirepass` is now stored and replicated too. User names and key patterns must be valid UTF-8. See [access control](docs/commands.md#access-control).
 - Protected mode, on by default as in Redis: while the `default` user has no password, clients from other hosts get `DENIED` and are disconnected. `-protected-mode=false` turns it off. See [protected mode](docs/configuration.md#protected-mode).
 - Client limits: `-maxclients`, 10,000 by default as in Redis, and `-timeout` for idle clients, off by default. After 10 failed `AUTH` attempts from one address within a second, the rest of that second's attempts from it are refused. `INFO` shows `maxclients` and `rejected_connections`, and the metric `casketdb_rejected_connections_total` counts refused connections. See [client limits](docs/configuration.md#client-limits).
 - Audit records in the server log, marked `component=audit`: successful and failed AUTH, `ACL SETUSER` and `DELUSER`, `CONFIG SET`, FLUSHDB and FLUSHALL, and the RAFT commands that change the cluster, each with the user and the client's address. See [audit records](docs/monitoring.md#audit-records).
@@ -16,6 +16,10 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 ### Security
 
 - A client that has not authenticated may send commands of at most 10 arguments of 16 KB each, as in Redis; a larger command closes the connection with `ERR Protocol error: unauthenticated multibulk length` or `bulk length`. Before, a client without the password could make the server hold up to `-proto-max-bulk-len` per argument.
+
+### Fixed
+
+- A Raft entry or a snapshot's file list that declared a field longer than the data that followed made a node allocate up to 4 GB before it failed. Found while adding fuzz tests of the decoders, which now run in CI and nightly.
 
 ### Upgrading from v0.12
 

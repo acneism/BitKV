@@ -57,6 +57,7 @@ Users are kept in the file `SYSTEM` in the data directory and survive restarts; 
 Differences from Redis:
 
 - Read-only and write-only key patterns (`%R~`, `%W~`), channels (`&`), selectors and rules for single subcommands (`+config|get`) are not supported.
+- User names and key patterns must be valid UTF-8, because `SYSTEM` is JSON; Redis takes any bytes in a key pattern.
 - `ACL SAVE`, `ACL LOAD`, `ACL GENPASS` and `ACL DRYRUN` are missing.
 - `ACL WHOAMI` and `ACL CAT` are open to every authenticated user; the other ACL subcommands need the `acl` command.
 - Disabling a user with `off` stops new logins; open connections keep working. Deleting a user closes its connections at their next command.

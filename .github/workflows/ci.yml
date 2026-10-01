@@ -80,3 +80,7 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test -run '^$' -fuzz '^FuzzReadCommand$' -fuzztime 60s ./internal/resp
+      - run: go test -run '^$' -fuzz '^FuzzACLRules$' -fuzztime 30s ./internal/server
+      - run: go test -run '^$' -fuzz '^FuzzScanner$' -fuzztime 30s ./internal/bitcask
+      - run: go test -run '^$' -fuzz '^FuzzEntry$' -fuzztime 30s ./internal/replica
+      - run: go test -run '^$' -fuzz '^FuzzSnapshotInfo$' -fuzztime 30s ./internal/replica

@@ -49,3 +49,34 @@ jobs:
             ${{ runner.temp }}/porcupine.html
             /tmp/casketdb-fault-*
           if-no-files-found: ignore
+
+  fuzz:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: FuzzReadCommand
+            pkg: ./internal/resp
+          - target: FuzzACLRules
+            pkg: ./internal/server
+          - target: FuzzScanner
+            pkg: ./internal/bitcask
+          - target: FuzzEntry
+            pkg: ./internal/replica
+          - target: FuzzSnapshotInfo
+            pkg: ./internal/replica
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go test -run '^$' -fuzz '^${{ matrix.target }}$' -fuzztime 10m ${{ matrix.pkg }}
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: "**/testdata/fuzz/"
+          if-no-files-found: ignore

@@ -103,7 +103,7 @@ A record in a `.hint` file is crc (4) + expireAt (8) + offset (8) + keyLen (4) +
 - Unit tests for every package, with the manual clock instead of wall time.
 - A model test: 20,000 random operations with merges and reopenings compared against a map.
 - Crash tests: torn tails, cut batches, interrupted merges and flushes, and disk images of a database after `kill -9`, power loss and loss of one log's unsynced tail.
-- A fuzz test of the RESP reader.
+- Fuzz tests of the decoders: the RESP reader, the scanner of data files, Raft entries, the file list of a snapshot, and ACL rules stored in `SYSTEM` and loaded back.
 - Cluster tests with 3 nodes in one process over TCP: concurrent writes, failover under load on a hot key, log compaction, tail replay after restart, catch-up by snapshot and interrupted restores, consistent reads, leadership transfer, membership changes and mutual TLS.
 - Fault-injection tests in `cmd/casketdb` that run real server processes under `kill -9`, network partitions, leadership transfers and membership changes, and check the RESP client history for linearizability with Porcupine. See [CONTRIBUTING](../CONTRIBUTING.md#fault-injection-tests).
 

@@ -1,7 +1,6 @@
 package replica
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
@@ -21,7 +20,6 @@ const (
 	kindSystem byte = 3
 	flagDelete byte = 1
 
-	maxField     = 1<<32 - 1
 	restoreBatch = 1024
 	restoreDir   = "restore"
 	snapshotInfo = "casketdb-snapshot"
@@ -126,7 +124,7 @@ func (f *bitcaskFSM) Restore(src node.SnapshotSource) error {
 	if err != nil {
 		return err
 	}
-	logs, files, err := readFileList(bufio.NewReader(bytes.NewReader(info)))
+	logs, files, err := readFileList(bytes.NewReader(info))
 	if err != nil {
 		return err
 	}
@@ -217,12 +215,7 @@ func appendOp(b []byte, op bitcask.Op) []byte {
 	return append(b, op.Value...)
 }
 
-type byteReader interface {
-	io.Reader
-	io.ByteReader
-}
-
-func readOp(r byteReader) (bitcask.Op, error) {
+func readOp(r *bytes.Reader) (bitcask.Op, error) {
 	flags, err := r.ReadByte()
 	if err != nil {
 		return bitcask.Op{}, err
@@ -240,13 +233,13 @@ func readOp(r byteReader) (bitcask.Op, error) {
 	return op, err
 }
 
-func readField(r byteReader) ([]byte, error) {
+func readField(r *bytes.Reader) ([]byte, error) {
 	n, err := binary.ReadUvarint(r)
 	if err != nil {
 		return nil, unexpected(err)
 	}
-	if n > maxField {
-		return nil, errEntry
+	if n > uint64(r.Len()) {
+		return nil, io.ErrUnexpectedEOF
 	}
 	b := make([]byte, n)
 	_, err = io.ReadFull(r, b)
@@ -271,7 +264,7 @@ func appendFileEntry(b []byte, sf bitcask.SnapshotFile) []byte {
 	return binary.AppendUvarint(b, uint64(sf.Size))
 }
 
-func readFileList(r *bufio.Reader) (int, []bitcask.SnapshotFile, error) {
+func readFileList(r *bytes.Reader) (int, []bitcask.SnapshotFile, error) {
 	logs, err := binary.ReadUvarint(r)
 	if err != nil || logs == 0 || logs > 1<<16 {
 		return 0, nil, errSnapshot
@@ -287,7 +280,7 @@ func readFileList(r *bufio.Reader) (int, []bitcask.SnapshotFile, error) {
 			return 0, nil, errSnapshot
 		}
 		size, err := binary.ReadUvarint(r)
-		if err != nil || !filepath.IsLocal(filepath.FromSlash(string(path))) {
+		if err != nil || int64(size) < 0 || !filepath.IsLocal(filepath.FromSlash(string(path))) {
 			return 0, nil, errSnapshot
 		}
 		files = append(files, bitcask.SnapshotFile{Path: string(path), Size: int64(size)})

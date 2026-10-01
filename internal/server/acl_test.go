@@ -31,6 +31,36 @@ func TestACLSurvivesRestart(t *testing.T) {
 	d.expect([]any{"carol", "default"}, "ACL", "USERS")
 }
 
+func FuzzACLRules(f *testing.F) {
+	f.Add("app\x00on\x00>pw\x00~app:*\x00+@read\x00-@dangerous\x00+set")
+	f.Add("default\x00on\x00nopass\x00allkeys\x00allcommands\x00-flushdb\x00resetkeys\x00~a b")
+	f.Add("ops\x00reset\x00#5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8\x00<pw\x00+@all\x00-@write")
+	f.Add("\xb6\x00~\xb6")
+	f.Fuzz(func(t *testing.T, line string) {
+		fields := strings.Split(line, "\x00")
+		name, rules := fields[0], fields[1:]
+		us := newUsers("")
+		if us.setUser(name, rules) != "" {
+			return
+		}
+		b, err := us.encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		loaded := newUsers("")
+		if err := loaded.load(b); err != nil {
+			t.Fatalf("user %q with rules %q stored as %s: %v", name, rules, b, err)
+		}
+		u := loaded.get(name)
+		if u == nil {
+			t.Fatalf("user %q stored as %s did not load", name, b)
+		}
+		if want, got := us.get(name).perms.Load().rules(), u.perms.Load().rules(); !slices.Equal(got, want) {
+			t.Fatalf("user %q with rules %q: stored %q, loaded %q", name, rules, want, got)
+		}
+	})
+}
+
 func TestAudit(t *testing.T) {
 	var log bytes.Buffer
 	srv, db, addr := startServerWith(t, t.TempDir(), Config{Logger: slog.New(slog.NewTextHandler(&log, nil))})

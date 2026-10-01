@@ -1,6 +1,7 @@
 package replica
 
 import (
+	"bytes"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -280,6 +282,46 @@ func copyDir(t *testing.T, from, to string) {
 
 func entry(index uint64, kind byte, ops ...bitcask.Op) raft.Entry {
 	return raft.Entry{Index: index, Term: 1, Data: encodeEntry(kind, ops)}
+}
+
+func FuzzEntry(f *testing.F) {
+	f.Add(encodeEntry(kindOps, []bitcask.Op{{Key: "k", Value: []byte("v"), ExpireAt: 5}, {Key: "d", Delete: true}})[1:])
+	f.Add([]byte{0, 0, 0xff, 0xff, 0xff, 0xff, 0x0f})
+	f.Fuzz(func(t *testing.T, data []byte) {
+		ops, err := decodeOps(bytes.NewReader(data))
+		if err != nil {
+			return
+		}
+		again, err := decodeOps(bytes.NewReader(encodeEntry(kindOps, ops)[1:]))
+		if err != nil || !reflect.DeepEqual(again, ops) {
+			t.Fatalf("ops %#v came back as %#v, %v", ops, again, err)
+		}
+	})
+}
+
+func FuzzSnapshotInfo(f *testing.F) {
+	info := appendFileList(nil, 4, 2)
+	info = appendFileEntry(info, bitcask.SnapshotFile{Path: "log-000/000001.data", Size: 100})
+	info = appendFileEntry(info, bitcask.SnapshotFile{Path: "SYSTEM", Size: 12})
+	f.Add(info)
+	f.Add(append(appendFileList(nil, 1, 1), 5, '.', '.', '/', 'x', 'y', 1))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		logs, files, err := readFileList(bytes.NewReader(data))
+		if err != nil {
+			return
+		}
+		b := appendFileList(nil, logs, len(files))
+		for _, sf := range files {
+			if !filepath.IsLocal(filepath.FromSlash(sf.Path)) || sf.Size < 0 {
+				t.Fatalf("accepted %#v", sf)
+			}
+			b = appendFileEntry(b, sf)
+		}
+		again, files2, err := readFileList(bytes.NewReader(b))
+		if err != nil || again != logs || !slices.Equal(files2, files) {
+			t.Fatalf("%d logs %#v came back as %d logs %#v, %v", logs, files, again, files2, err)
+		}
+	})
 }
 
 func TestConcurrentWritesReplicate(t *testing.T) {

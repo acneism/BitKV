@@ -41,7 +41,7 @@ This page lists what CasketDB protects, from whom, and what it leaves to the dep
 | | Reads the password from the process list | `CASKETDB_REQUIREPASS` instead of `-requirepass` | |
 | Anyone who reaches `/metrics` | Learns about the database | Counts and sizes only, no keys or values | No authentication: bind it to loopback or a private address |
 | Anyone who gets the disks, backups or copies of the files | Reads keys, values and password hashes | None inside CasketDB; see [encryption at rest](../SECURITY.md#encryption-at-rest) | Hashes are unsalted SHA-256: a short password falls to offline guessing |
-| Malformed input from the network | Crashes the server or blows up its memory | The RESP parser is fuzzed in CI; a command that panics closes only its own connection | |
+| Malformed input from the network | Crashes the server or blows up its memory | The RESP parser, the decoders of data files, Raft entries and snapshots, and the ACL rules are fuzzed in CI and nightly; a command that panics closes only its own connection | |
 | A vulnerable dependency | Exploits a bug outside CasketDB's code | The standard library only, except Raft; `govulncheck` in CI and nightly | |
 
 ## Out of scope

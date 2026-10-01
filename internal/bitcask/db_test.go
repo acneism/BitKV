@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -1297,4 +1298,28 @@ func TestProposeReportsWhatTheOutcomeDependsOn(t *testing.T) {
 	if index, _ := propose(7, read); index != 0 {
 		t.Fatalf("after the proposal is applied a no-op write depends on %d, want 0", index)
 	}
+}
+
+func FuzzScanner(f *testing.F) {
+	valid := appendRecord(nil, 0, 0, "key", []byte("value"))
+	valid = appendRecord(valid, flagTombstone, 0, "key", nil)
+	valid = appendTxHeader(valid, 7, 2)
+	valid = appendControl(valid, flagMark, 42)
+	f.Add(valid)
+	f.Add(valid[:len(valid)-3])
+	f.Fuzz(func(t *testing.T, data []byte) {
+		s := newScanner(bytes.NewReader(data), int64(len(data)))
+		for {
+			r, err := s.next()
+			if err != nil {
+				if !errors.Is(err, io.EOF) && !errors.Is(err, errTorn) {
+					t.Fatalf("scan failed with %v", err)
+				}
+				return
+			}
+			if got := appendRecord(nil, r.flags, r.expireAt, string(r.key), r.value); !bytes.Equal(got, data[r.offset:s.offset]) {
+				t.Fatalf("record at %d encodes to %x, the file has %x", r.offset, got, data[r.offset:s.offset])
+			}
+		}
+	})
 }

@@ -76,9 +76,9 @@ wsl ./fault.test -test.run TestFaults -test.timeout 30m -fault.duration=5m -faul
 - `go mod tidy -diff`, [golangci-lint](#linters) and govulncheck;
 - `go vet` and `go test` on Linux, Windows and macOS; on Linux with coverage, listed in the run's summary. Coverage of `internal/bitcask`, `internal/replica` and `internal/server` below 80% fails the run;
 - `go test -race` on Linux;
-- one minute of `FuzzReadCommand`.
+- the fuzz tests: one minute of `FuzzReadCommand` (the RESP reader) and 30 seconds each of `FuzzACLRules` (ACL rules stored in `SYSTEM` and loaded back), `FuzzScanner` (records of a data file), `FuzzEntry` (Raft entries) and `FuzzSnapshotInfo` (the file list of a snapshot).
 
-The [nightly workflow](.github/workflows/nightly.yml), which can also be started by hand, runs govulncheck, so a new advisory shows up without a push, and `TestFaults` with linearizable reads, `TestFaults` with lease reads and `TestMembershipChanges`, ten minutes each. A failed run keeps the node logs and the Porcupine visualization as build artifacts.
+The [nightly workflow](.github/workflows/nightly.yml), which can also be started by hand, runs govulncheck, so a new advisory shows up without a push, `TestFaults` with linearizable reads, `TestFaults` with lease reads and `TestMembershipChanges`, ten minutes each, and every fuzz test for ten minutes. A failed run keeps the node logs, the Porcupine visualization or the failing fuzz input as build artifacts. To fuzz locally, run for example `go test -run '^$' -fuzz '^FuzzEntry$' -fuzztime 5m ./internal/replica`; a failing input lands in the package's `testdata/fuzz` directory and becomes a regression test once committed.
 
 `main` is protected: a commit lands there only after CI has passed on it, on a branch that is up to date with `main`. Push a branch, open a pull request, wait for a green run, then merge.
 

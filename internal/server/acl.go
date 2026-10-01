@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 type category uint32
@@ -134,6 +135,9 @@ func (p *perms) apply(rule string) bool {
 			p.removePassword([32]byte(h))
 		}
 	case strings.HasPrefix(rule, "~"):
+		if !utf8.ValidString(rule) {
+			return false
+		}
 		if !p.allKeys {
 			p.patterns = append(p.patterns, rule[1:])
 		}
@@ -414,6 +418,9 @@ func hostOf(addr net.Addr) string {
 }
 
 func (us *users) setUser(name string, rules []string) string {
+	if !utf8.ValidString(name) {
+		return "ERR Usernames must be valid UTF-8"
+	}
 	us.mu.Lock()
 	defer us.mu.Unlock()
 	u := us.byName[name]

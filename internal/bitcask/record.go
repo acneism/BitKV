@@ -6,7 +6,6 @@ import (
 	"errors"
 	"hash/crc32"
 	"io"
-	"os"
 )
 
 const (
@@ -120,7 +119,7 @@ type scanner struct {
 	hdr    [headerSize]byte
 }
 
-func newScanner(f *os.File, size int64) *scanner {
+func newScanner(f io.ReaderAt, size int64) *scanner {
 	return &scanner{r: bufio.NewReaderSize(io.NewSectionReader(f, 0, size), 1<<20), size: size}
 }
 
