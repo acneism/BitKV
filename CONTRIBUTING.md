@@ -35,6 +35,8 @@ go test ./...
 
 Run both on Linux and on Windows when your change touches files, fsync, memory mapping or locking: these paths differ between the two systems.
 
+The replica tests run three-node clusters with a 500 ms election timeout. On a machine whose fsync stalls for longer, a leader can lose its followers mid-test and a write fails with a leadership change; set `CASKETDB_TEST_ELECTION_TICKS` (in milliseconds) to raise it. The Windows CI runners use 2000.
+
 The race detector needs cgo, so run it on Linux (on Windows, use WSL):
 
 ```bash

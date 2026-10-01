@@ -41,6 +41,9 @@ var tuning = testTuning
 func testTuning(c *node.Config) {
 	c.TickInterval = time.Millisecond
 	c.ElectionTicks = 500
+	if n, err := strconv.Atoi(os.Getenv("CASKETDB_TEST_ELECTION_TICKS")); err == nil {
+		c.ElectionTicks = n
+	}
 	c.CompactEntries = 16
 	c.TrailingEntries = 4
 	c.SegmentSize = 8 << 10

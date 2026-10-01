@@ -46,6 +46,8 @@ jobs:
         run: go test -timeout 15m ./...
       - if: matrix.os == 'windows-latest'
         run: go test -p 1 -timeout 20m ./...
+        env:
+          CASKETDB_TEST_ELECTION_TICKS: "2000"
       - if: matrix.os == 'ubuntu-latest'
         name: go test with coverage
         run: |
