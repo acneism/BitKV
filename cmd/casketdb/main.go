@@ -66,16 +66,18 @@ func main() {
 	flag.StringVar(&cfg.raftKey, "raft-tls-key", "", "PEM private key for -raft-tls-cert")
 	flag.StringVar(&cfg.raftCA, "raft-tls-ca", "", "PEM certificates of the CA that signs node certificates")
 	flag.Parse()
-	if err := applyEnv(flag.CommandLine, os.LookupEnv); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	shadowed, err := applyEnv(flag.CommandLine, os.LookupEnv)
+	for _, name := range shadowed {
+		logger.Warn("environment variable ignored, the command-line flag wins", "variable", name)
 	}
 	if cfg.raftDir == "" {
 		cfg.raftDir = filepath.Join(cfg.dir, "raft")
 	}
-
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	if err := run(logger, cfg); err != nil {
+	if err == nil {
+		err = run(logger, cfg)
+	}
+	if err != nil {
 		logger.Error("fatal", "err", err)
 		os.Exit(1)
 	}
@@ -145,19 +147,23 @@ func run(logger *slog.Logger, cfg config) error {
 	return err
 }
 
-func applyEnv(fs *flag.FlagSet, lookup func(string) (string, bool)) error {
+func applyEnv(fs *flag.FlagSet, lookup func(string) (string, bool)) (shadowed []string, err error) {
 	explicit := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
-	var err error
 	fs.VisitAll(func(f *flag.Flag) {
 		name := "CASKETDB_" + strings.ToUpper(strings.ReplaceAll(f.Name, "-", "_"))
-		if v, ok := lookup(name); ok && !explicit[f.Name] && err == nil {
+		v, ok := lookup(name)
+		switch {
+		case !ok || err != nil:
+		case explicit[f.Name]:
+			shadowed = append(shadowed, name)
+		default:
 			if serr := fs.Set(f.Name, v); serr != nil {
 				err = fmt.Errorf("%s: %w", name, serr)
 			}
 		}
 	})
-	return err
+	return shadowed, err
 }
 
 func isLoopback(addr net.Addr) bool {

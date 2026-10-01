@@ -48,7 +48,8 @@ Outside MULTI, KEYS, SCAN and DBSIZE lock one shard at a time. The result is not
 
 - `SAVE` forces an fsync of all logs. There is no RDB file.
 - `BGREWRITEAOF` starts a merge (compaction) of all logs.
-- `CONFIG GET` answers `appendonly`, `appendfsync`, `save`, `databases` and `proto-max-bulk-len`. `CONFIG SET` is not supported; configure the server with [flags](configuration.md).
+- `CONFIG GET` answers `appendonly`, `appendfsync`, `save`, `databases`, `proto-max-bulk-len` and `requirepass`.
+- `CONFIG SET` changes `requirepass`, `appendfsync` and `proto-max-bulk-len`, several at once and all or none. As in Redis, it changes only the node it runs on: in a cluster, run it on every node. The change lasts until restart, and there is no config file for `CONFIG REWRITE` to write; keep settings in [flags or `CASKETDB_` variables](configuration.md). A new password does not log out open connections, and a new `proto-max-bulk-len` applies to new connections.
 - `COMMAND` returns an empty list and `COMMAND COUNT` the number of commands. Both exist so that `redis-cli` and `redis-benchmark` start.
 - `FLUSHDB` and `FLUSHALL` do the same thing.
 

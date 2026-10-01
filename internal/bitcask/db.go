@@ -53,6 +53,7 @@ type DB struct {
 	fsyncs      atomic.Int64
 	expiredKeys atomic.Int64
 	applied     atomic.Uint64
+	syncPolicy  atomic.Int32
 
 	expireCursor int
 
@@ -80,6 +81,7 @@ func Open(dir string, opts Options) (*DB, error) {
 		return nil, err
 	}
 	db := &DB{dir: dir, opts: opts, lock: lock, kd: newKeydir(), stop: make(chan struct{})}
+	db.SetSync(opts.Sync)
 	if err := db.open(); err != nil {
 		for _, g := range db.groups {
 			_ = g.closeFiles()
@@ -194,7 +196,17 @@ func (db *DB) Close() error {
 }
 
 func (db *DB) Options() Options {
-	return db.opts
+	o := db.opts
+	o.Sync = db.policy()
+	return o
+}
+
+func (db *DB) SetSync(p SyncPolicy) {
+	db.syncPolicy.Store(int32(p))
+}
+
+func (db *DB) policy() SyncPolicy {
+	return SyncPolicy(db.syncPolicy.Load())
 }
 
 func (db *DB) Len() int {
@@ -413,12 +425,13 @@ func (db *DB) Merge() error {
 }
 
 func (db *DB) startBackground() {
-	switch db.opts.Sync {
-	case SyncEverySec, SyncAlways:
-		db.every(time.Second, func() { _ = db.Sync() })
-	case SyncNo:
-		db.every(time.Second, db.writeQueued)
-	}
+	db.every(time.Second, func() {
+		if db.policy() == SyncNo {
+			db.writeQueued()
+			return
+		}
+		_ = db.Sync()
+	})
 	if db.opts.ExpireInterval > 0 {
 		db.every(db.opts.ExpireInterval, db.expireCycle)
 	}

@@ -6,7 +6,8 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 
 ### Added
 
-- Every flag can be set through an environment variable, `CASKETDB_` plus the flag name in upper case with underscores: `CASKETDB_RAFT_PEERS`, `CASKETDB_APPENDFSYNC`. The command line wins. Before, only `CASKETDB_REQUIREPASS` existed.
+- Every flag can be set through an environment variable, `CASKETDB_` plus the flag name in upper case with underscores: `CASKETDB_RAFT_PEERS`, `CASKETDB_APPENDFSYNC`. The command line wins, with a warning naming the ignored variable. Before, only `CASKETDB_REQUIREPASS` existed.
+- `CONFIG SET` changes `requirepass`, `appendfsync` and `proto-max-bulk-len` at runtime, on one node and until restart, as in Redis. `CONFIG GET` also answers `requirepass`.
 
 ### Fixed
 

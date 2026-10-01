@@ -117,7 +117,7 @@ func (g *logGroup) carryMarkLocked() error {
 
 func (g *logGroup) durableMark() uint64 {
 	var done uint64
-	if g.db.opts.Sync == SyncNo {
+	if g.db.policy() == SyncNo {
 		g.wmu.Lock()
 		done = g.written
 		g.wmu.Unlock()

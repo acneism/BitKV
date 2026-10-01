@@ -980,6 +980,20 @@ func TestParallelWritersAndGlobalReaders(t *testing.T) {
 	})
 }
 
+func TestSetSyncTakesEffect(t *testing.T) {
+	db := mustOpen(t, t.TempDir(), testOptions())
+	defer mustClose(t, db)
+	db.SetSync(SyncAlways)
+	before := db.Stats().Fsyncs
+	put(t, db, "k", "v", 0)
+	if db.Stats().Fsyncs == before {
+		t.Fatal("a write after SetSync(SyncAlways) returned without an fsync")
+	}
+	if db.Options().Sync != SyncAlways {
+		t.Fatalf("Options().Sync = %v, want always", db.Options().Sync)
+	}
+}
+
 func TestReadOnlyTxRejectsWrites(t *testing.T) {
 	db := mustOpen(t, t.TempDir(), testOptions())
 	defer mustClose(t, db)

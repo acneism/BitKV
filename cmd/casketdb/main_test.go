@@ -26,16 +26,20 @@ func TestApplyEnv(t *testing.T) {
 		v, ok := env[name]
 		return v, ok
 	}
-	if err := applyEnv(fs, lookup); err != nil {
+	shadowed, err := applyEnv(fs, lookup)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if *addr != "0.0.0.0:7000" || *peers != "n1=a:1,n2=b:2" || !*join || *timeout != 2*time.Second {
 		t.Fatalf("addr %q, peers %q, join %v, timeout %v", *addr, *peers, *join, *timeout)
 	}
+	if len(shadowed) != 1 || shadowed[0] != "CASKETDB_ADDR" {
+		t.Fatalf("shadowed = %v, want [CASKETDB_ADDR]", shadowed)
+	}
 	fresh := flag.NewFlagSet("casketdb", flag.ContinueOnError)
 	fresh.Duration("raft-election-timeout", time.Second, "")
 	env["CASKETDB_RAFT_ELECTION_TIMEOUT"] = "soon"
-	if err := applyEnv(fresh, lookup); err == nil || !strings.Contains(err.Error(), "CASKETDB_RAFT_ELECTION_TIMEOUT") {
+	if _, err := applyEnv(fresh, lookup); err == nil || !strings.Contains(err.Error(), "CASKETDB_RAFT_ELECTION_TIMEOUT") {
 		t.Fatalf("bad duration: %v", err)
 	}
 }

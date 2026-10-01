@@ -562,6 +562,29 @@ func TestAuth(t *testing.T) {
 	open.expect(status("PONG"), "PING")
 }
 
+func TestConfigSet(t *testing.T) {
+	srv, db, addr := startServer(t, t.TempDir())
+	defer stopServer(t, srv, db)
+	c := dial(t, addr)
+	c.expect(errReply("ERR Unknown option or number of arguments for CONFIG SET - 'dir'"), "CONFIG", "SET", "dir", "/tmp")
+	c.expect(errReply("ERR CONFIG SET failed (possibly related to argument 'appendfsync')"), "CONFIG", "SET", "requirepass", "s3cret", "appendfsync", "never")
+	c.expect(errReply("ERR CONFIG SET failed (possibly related to argument 'requirepass') - duplicate"), "CONFIG", "SET", "requirepass", "a", "requirepass", "b")
+	c.expect(errReply("ERR wrong number of arguments for 'config|set'"), "CONFIG", "SET", "requirepass")
+	c.expect([]any{"requirepass", ""}, "CONFIG", "GET", "requirepass")
+
+	c.expect(status("OK"), "CONFIG", "SET", "requirepass", "s3cret", "appendfsync", "always", "proto-max-bulk-len", "8")
+	c.expect([]any{"appendfsync", "always", "proto-max-bulk-len", "8", "requirepass", "s3cret"}, "CONFIG", "GET", "appendfsync", "proto-max-bulk-len", "requirepass")
+	if db.Options().Sync != bitcask.SyncAlways {
+		t.Fatalf("sync policy = %v, want always", db.Options().Sync)
+	}
+	c.expect(status("OK"), "SET", "long", "0123456789")
+
+	fresh := dial(t, addr)
+	fresh.expect(errReply("NOAUTH"), "GET", "long")
+	fresh.expect(status("OK"), "AUTH", "s3cret")
+	fresh.expect(errReply("ERR Protocol error: invalid bulk length"), "SET", "long", "0123456789")
+}
+
 func TestMatchGlob(t *testing.T) {
 	tests := []struct {
 		pattern, s string

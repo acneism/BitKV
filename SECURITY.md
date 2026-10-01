@@ -15,7 +15,7 @@ Include the version or commit, the flags the server ran with, steps to reproduce
 Deploy CasketDB with these properties in mind:
 
 - **No TLS.** Client connections, including the password, travel in plain text. Use a private network, a VPN or a TLS-terminating proxy.
-- **One password, no users.** `-requirepass` protects every command except AUTH, HELLO and QUIT. There are no per-user permissions.
+- **One password, no users.** `-requirepass` protects every command except AUTH, HELLO and QUIT. There are no per-user permissions: any client that knows the password can also change it, and the sync policy, with `CONFIG SET`. Paths, addresses and TLS files cannot be changed at runtime.
 - **Loopback by default.** The server listens on `127.0.0.1:6379` unless `-addr` says otherwise, and logs a warning if it listens elsewhere without a password.
 - **Password in the environment.** Prefer `CASKETDB_REQUIREPASS` to `-requirepass`: command-line flags are visible in the process list.
 - **Raft transport.** Turn on mutual TLS between nodes with `-raft-tls-cert`, `-raft-tls-key` and `-raft-tls-ca`: traffic is encrypted and a node must present a certificate for its own id. Without TLS, nodes trust any peer that connects to the Raft port, and the server logs a warning when its Raft address is not a loopback address. Either way, firewall Raft ports from clients. See [mutual TLS between nodes](docs/replication.md#mutual-tls-between-nodes).

@@ -33,7 +33,9 @@ Sizes are given in bytes, for example `-max-file-size 134217728` for 128 MB. Dur
 
 ## Environment
 
-Every flag can also come from an environment variable: `CASKETDB_` and the flag name in upper case, with dashes turned into underscores. `-raft-peers` is `CASKETDB_RAFT_PEERS`, `-appendfsync` is `CASKETDB_APPENDFSYNC`. A flag on the command line wins over the variable. A value the flag does not accept stops the server with the variable's name in the error.
+Every flag can also come from an environment variable: `CASKETDB_` and the flag name in upper case, with dashes turned into underscores. `-raft-peers` is `CASKETDB_RAFT_PEERS`, `-appendfsync` is `CASKETDB_APPENDFSYNC`. A flag on the command line wins over the variable, and the server logs a warning naming the variable it ignored. A value the flag does not accept stops the server with the variable's name in the error.
+
+`requirepass`, `appendfsync` and `proto-max-bulk-len` can also be changed at runtime with [`CONFIG SET`](commands.md#server-commands), on one node and until restart.
 
 This is also the way to keep settings in a file: `EnvironmentFile=` in a systemd unit, `--env-file` in Docker. Pass the password as `CASKETDB_REQUIREPASS` rather than `-requirepass`, which the process list shows to every user.
 

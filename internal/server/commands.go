@@ -199,7 +199,7 @@ func cmdAuth(s *Server, c *client, args [][]byte) reply {
 	if len(args) > 3 {
 		return errorReply(errSyntax)
 	}
-	if len(args) == 2 && s.cfg.RequirePass == "" {
+	if len(args) == 2 && s.password() == "" {
 		return errorReply("ERR AUTH <password> called without any password configured for the default user. Are you sure your configuration is correct?")
 	}
 	user := "default"
@@ -319,7 +319,8 @@ func cmdConfig(s *Server, c *client, args [][]byte) reply {
 			"appendfsync":        s.db.Options().Sync.String(),
 			"save":               "",
 			"databases":          "1",
-			"proto-max-bulk-len": strconv.Itoa(s.cfg.MaxBulkLen),
+			"proto-max-bulk-len": strconv.FormatInt(s.maxBulk.Load(), 10),
+			"requirepass":        s.password(),
 		}
 		var out stringsReply
 		for _, name := range slices.Sorted(maps.Keys(params)) {
@@ -332,11 +333,51 @@ func cmdConfig(s *Server, c *client, args [][]byte) reply {
 		}
 		return out
 	case "SET":
-		return errorReply("ERR CONFIG SET is not supported")
+		return configSet(s, c, args[2:])
+	case "REWRITE":
+		return errorReply("ERR CONFIG REWRITE is not supported: CONFIG SET lasts until restart, keep settings in flags or CASKETDB_ variables")
 	case "RESETSTAT":
 		return okReply
 	}
 	return unknownSubcommand(args)
+}
+
+func configSet(s *Server, c *client, args [][]byte) reply {
+	if len(args) == 0 || len(args)%2 != 0 {
+		return errorReply("ERR wrong number of arguments for 'config|set' command")
+	}
+	var names []string
+	var apply []func()
+	for i := 0; i < len(args); i += 2 {
+		name, value := strings.ToLower(string(args[i])), string(args[i+1])
+		if slices.Contains(names, name) {
+			return errorReply("ERR CONFIG SET failed (possibly related to argument '" + name + "') - duplicate parameter")
+		}
+		names = append(names, name)
+		switch name {
+		case "requirepass":
+			apply = append(apply, func() { s.pass.Store(&value) })
+		case "appendfsync":
+			p, err := bitcask.ParseSyncPolicy(value)
+			if err != nil {
+				return errorReply("ERR CONFIG SET failed (possibly related to argument 'appendfsync') - argument must be one of the following: always, everysec, no")
+			}
+			apply = append(apply, func() { s.db.SetSync(p) })
+		case "proto-max-bulk-len":
+			n, err := strconv.Atoi(value)
+			if err != nil || n < 1 {
+				return errorReply("ERR CONFIG SET failed (possibly related to argument 'proto-max-bulk-len') - argument must be a positive number of bytes")
+			}
+			apply = append(apply, func() { s.maxBulk.Store(int64(n)) })
+		default:
+			return errorReply("ERR Unknown option or number of arguments for CONFIG SET - '" + truncate(args[i], 128) + "'")
+		}
+	}
+	for _, f := range apply {
+		f()
+	}
+	s.log.Info("config changed", "params", names, "client", c.conn.RemoteAddr().String())
+	return okReply
 }
 
 func cmdInfo(s *Server, c *client, args [][]byte) reply {

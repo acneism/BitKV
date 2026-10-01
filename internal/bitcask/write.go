@@ -36,7 +36,7 @@ func (db *DB) await(waits []waitPoint) error {
 			return err
 		}
 	}
-	if db.opts.Sync != SyncAlways {
+	if db.policy() != SyncAlways {
 		return nil
 	}
 	for _, w := range waits {

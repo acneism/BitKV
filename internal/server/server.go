@@ -45,6 +45,9 @@ type Server struct {
 	nextID      atomic.Int64
 	connections atomic.Int64
 	processed   atomic.Int64
+
+	pass    atomic.Pointer[string]
+	maxBulk atomic.Int64
 }
 
 type client struct {
@@ -69,7 +72,7 @@ func New(db *bitcask.DB, cfg Config) *Server {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Server{
+	s := &Server{
 		db:        db,
 		cfg:       cfg,
 		log:       logger,
@@ -77,6 +80,13 @@ func New(db *bitcask.DB, cfg Config) *Server {
 		listeners: make(map[net.Listener]struct{}),
 		clients:   make(map[*client]struct{}),
 	}
+	s.pass.Store(&cfg.RequirePass)
+	s.maxBulk.Store(int64(cfg.MaxBulkLen))
+	return s
+}
+
+func (s *Server) password() string {
+	return *s.pass.Load()
 }
 
 func (s *Server) Serve(ln net.Listener) error {
@@ -107,9 +117,9 @@ func (s *Server) Serve(ln net.Listener) error {
 		c := &client{
 			id:     s.nextID.Add(1),
 			conn:   conn,
-			r:      resp.NewReader(conn, s.cfg.MaxBulkLen),
+			r:      resp.NewReader(conn, int(s.maxBulk.Load())),
 			w:      resp.NewWriter(conn),
-			authed: s.cfg.RequirePass == "",
+			authed: s.password() == "",
 		}
 		s.mu.Lock()
 		if s.closed {
@@ -155,7 +165,8 @@ func (s *Server) checkAuth(user string, pass []byte) bool {
 	if user != "default" {
 		return false
 	}
-	return s.cfg.RequirePass == "" || subtle.ConstantTimeCompare(pass, []byte(s.cfg.RequirePass)) == 1
+	want := s.password()
+	return want == "" || subtle.ConstantTimeCompare(pass, []byte(want)) == 1
 }
 
 func (s *Server) serveClient(c *client) {
