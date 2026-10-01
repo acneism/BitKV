@@ -22,7 +22,7 @@ CasketDB is configured with command-line flags or the matching [environment vari
 | `-merge-ratio` | `0.5` | Share of dead bytes in a log that triggers an automatic merge |
 | `-merge-min-bytes` | 64 MB | Minimum database size for an automatic merge, split evenly between logs |
 | `-merge-interval` | `1m` | How often to check whether a log needs a merge; `0` turns automatic merge off |
-| `-proto-max-bulk-len` | 512 MB | Largest bulk string a client may send |
+| `-proto-max-bulk-len` | 512 MB | Largest bulk string a client may send; until it authenticates, 16 KB |
 | `-metrics-addr` | empty | Address of the Prometheus endpoint `/metrics`, for example `127.0.0.1:9121`; empty turns it off. See [monitoring](monitoring.md) |
 | `-log-level` | `info` | `debug`, `info`, `warn` or `error` |
 | `-log-format` | `text` | `text` (key=value) or `json`, one record per line on standard error |

@@ -103,3 +103,4 @@ On a node that is not the leader, the commands answer `ERR this node is not the 
 | Bulk string (key or value) | `-proto-max-bulk-len`, 512 MB by default |
 | Arguments per command | 1,048,576 |
 | Inline command line | 64 KB |
+| Command from a client that has not authenticated | 10 arguments of up to 16 KB, as in Redis; more closes the connection with `ERR Protocol error: unauthenticated …` |

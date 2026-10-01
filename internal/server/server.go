@@ -239,6 +239,7 @@ func (s *Server) serveClient(c *client) {
 	}
 	var batch []queued
 	for !c.quit {
+		c.r.Unauthenticated = c.user == nil
 		args, err := c.r.ReadCommand()
 		if err != nil {
 			s.runBatch(c, batch)

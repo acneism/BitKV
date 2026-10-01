@@ -13,6 +13,10 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 - Client limits: `-maxclients`, 10,000 by default as in Redis, and `-timeout` for idle clients, off by default. After 10 failed `AUTH` attempts from one address within a second, the rest of that second's attempts from it are refused. `INFO` shows `maxclients` and `rejected_connections`, and the metric `casketdb_rejected_connections_total` counts refused connections. See [client limits](docs/configuration.md#client-limits).
 - Audit records in the server log, marked `component=audit`: successful and failed AUTH, `ACL SETUSER` and `DELUSER`, `CONFIG SET`, FLUSHDB and FLUSHALL, and the RAFT commands that change the cluster, each with the user and the client's address. See [audit records](docs/monitoring.md#audit-records).
 
+### Security
+
+- A client that has not authenticated may send commands of at most 10 arguments of 16 KB each, as in Redis; a larger command closes the connection with `ERR Protocol error: unauthenticated multibulk length` or `bulk length`. Before, a client without the password could make the server hold up to `-proto-max-bulk-len` per argument.
+
 ### Upgrading from v0.12
 
 - A server that listens on a non-loopback address without a password now refuses clients from other hosts. Set a password, or start it with `-protected-mode=false` (`CASKETDB_PROTECTED_MODE=false`) where every client that can reach it is trusted.

@@ -623,6 +623,27 @@ func TestClientLimits(t *testing.T) {
 	dial(t, addr).expect(status("PONG"), "PING")
 }
 
+func TestUnauthenticatedLimits(t *testing.T) {
+	srv, db, addr := startServerWith(t, t.TempDir(), Config{RequirePass: "pw"})
+	defer stopServer(t, srv, db)
+	for header, want := range map[string]string{
+		"*11\r\n":                        "ERR Protocol error: unauthenticated multibulk length",
+		"*2\r\n$4\r\nAUTH\r\n$16385\r\n": "ERR Protocol error: unauthenticated bulk length",
+	} {
+		c := dial(t, addr)
+		if _, err := io.WriteString(c.conn, header); err != nil {
+			t.Fatal(err)
+		}
+		if got := c.read(); got != errReply(want) {
+			t.Fatalf("%q from a client that has not authenticated = %#v, want %q", header, got, want)
+		}
+	}
+	c := dial(t, addr)
+	c.expect(status("OK"), "AUTH", "pw")
+	c.expect(status("OK"), "SET", "k", strings.Repeat("v", 16385))
+	c.expect(status("OK"), "MSET", "a", "1", "b", "2", "c", "3", "d", "4", "e", "5")
+}
+
 func TestAuthThrottle(t *testing.T) {
 	srv, db, addr := startServerWith(t, t.TempDir(), Config{RequirePass: "pw"})
 	defer stopServer(t, srv, db)

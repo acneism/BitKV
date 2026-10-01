@@ -16,6 +16,8 @@ const (
 	readerBuffer = 16 << 10
 	slabSize     = 16 << 10
 	slabMaxBulk  = 1 << 10
+	guestArgs    = 10
+	guestBulk    = 16 << 10
 )
 
 type ProtocolError struct {
@@ -27,6 +29,8 @@ func (e *ProtocolError) Error() string {
 }
 
 type Reader struct {
+	Unauthenticated bool
+
 	br      *bufio.Reader
 	maxBulk int
 	slab    []byte
@@ -87,6 +91,9 @@ func (r *Reader) ReadCommand() ([][]byte, error) {
 	if !ok || n > maxArgs {
 		return nil, &ProtocolError{"invalid multibulk length"}
 	}
+	if r.Unauthenticated && n > guestArgs {
+		return nil, &ProtocolError{"unauthenticated multibulk length"}
+	}
 	if n <= 0 {
 		return nil, nil
 	}
@@ -106,6 +113,9 @@ func (r *Reader) ReadCommand() ([][]byte, error) {
 		size, ok := parseInt(line[1:])
 		if !ok || size < 0 || size > r.maxBulk {
 			return nil, &ProtocolError{"invalid bulk length"}
+		}
+		if r.Unauthenticated && size > guestBulk {
+			return nil, &ProtocolError{"unauthenticated bulk length"}
 		}
 		b, err := r.readBulk(size)
 		if err != nil {
