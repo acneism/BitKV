@@ -40,6 +40,10 @@ type config struct {
 	raftListen  string
 	raftTimeout time.Duration
 	metricsAddr string
+	tlsAddr     string
+	tlsCert     string
+	tlsKey      string
+	tlsCA       string
 	logLevel    string
 	logFormat   string
 	opts        bitcask.Options
@@ -47,7 +51,11 @@ type config struct {
 
 func main() {
 	cfg := config{opts: bitcask.DefaultOptions()}
-	flag.StringVar(&cfg.addr, "addr", "127.0.0.1:6379", "TCP listen address")
+	flag.StringVar(&cfg.addr, "addr", "127.0.0.1:6379", "TCP listen address for clients without TLS; empty turns it off")
+	flag.StringVar(&cfg.tlsAddr, "tls-addr", "", "TCP listen address for TLS clients; empty turns TLS off")
+	flag.StringVar(&cfg.tlsCert, "tls-cert", "", "PEM certificate for -tls-addr, read again whenever the file changes")
+	flag.StringVar(&cfg.tlsKey, "tls-key", "", "PEM private key of -tls-cert")
+	flag.StringVar(&cfg.tlsCA, "tls-ca", "", "PEM certificates of the CA that signs client certificates; when set, every TLS client must present one")
 	flag.StringVar(&cfg.dir, "dir", "data", "data directory")
 	flag.StringVar(&cfg.fsync, "appendfsync", "everysec", "fsync policy: always, everysec or no")
 	flag.Int64Var(&cfg.opts.MaxFileSize, "max-file-size", cfg.opts.MaxFileSize, "data file rotation threshold in bytes")
@@ -124,19 +132,18 @@ func run(logger *slog.Logger, cfg config) error {
 		}
 	}
 
-	ln, err := net.Listen("tcp", cfg.addr)
+	lns, err := listen(cfg, logger)
 	if err != nil {
 		return errors.Join(err, closeStore(rep, db))
-	}
-	if cfg.requirePass == "" && !isLoopback(ln.Addr()) {
-		logger.Warn("listening on a non-loopback address without a password; set -requirepass", "addr", ln.Addr().String())
 	}
 	srv := server.New(db, server.Config{MaxBulkLen: cfg.maxBulk, RequirePass: cfg.requirePass, Logger: logger, Replica: rep, TrackLatency: cfg.metricsAddr != ""})
 	var metrics *http.Server
 	if cfg.metricsAddr != "" {
 		mln, err := net.Listen("tcp", cfg.metricsAddr)
 		if err != nil {
-			ln.Close()
+			for _, ln := range lns {
+				ln.Close()
+			}
 			return errors.Join(err, closeStore(rep, db))
 		}
 		mux := http.NewServeMux()
@@ -148,10 +155,17 @@ func run(logger *slog.Logger, cfg config) error {
 		go func() { _ = metrics.Serve(mln) }()
 		logger.Info("metrics endpoint ready", "url", "http://"+mln.Addr().String()+"/metrics")
 	}
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- srv.Serve(ln) }()
-	logger.Info("ready to accept connections", "addr", ln.Addr().String(), "appendfsync", policy.String(),
-		"auth", cfg.requirePass != "", "version", server.Version)
+	serveErr := make(chan error, len(lns))
+	attrs := []any{"appendfsync", policy.String(), "auth", cfg.requirePass != "", "version", server.Version}
+	for i, ln := range lns {
+		key := "addr"
+		if cfg.tlsAddr != "" && i == len(lns)-1 {
+			key = "tls_addr"
+		}
+		attrs = append(attrs, key, ln.Addr().String())
+		go func() { serveErr <- srv.Serve(ln) }()
+	}
+	logger.Info("ready to accept connections", attrs...)
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
@@ -174,6 +188,53 @@ func run(logger *slog.Logger, cfg config) error {
 		logger.Info("bye")
 	}
 	return err
+}
+
+func listen(cfg config, logger *slog.Logger) ([]net.Listener, error) {
+	switch {
+	case cfg.addr == "" && cfg.tlsAddr == "":
+		return nil, errors.New("set -addr, -tls-addr or both")
+	case cfg.tlsAddr != "" && (cfg.tlsCert == "" || cfg.tlsKey == ""):
+		return nil, errors.New("-tls-addr needs -tls-cert and -tls-key")
+	case cfg.tlsAddr == "" && (cfg.tlsCert != "" || cfg.tlsKey != "" || cfg.tlsCA != ""):
+		return nil, errors.New("-tls-cert, -tls-key and -tls-ca need -tls-addr")
+	}
+	var lns []net.Listener
+	fail := func(err error) ([]net.Listener, error) {
+		for _, ln := range lns {
+			ln.Close()
+		}
+		return nil, err
+	}
+	if cfg.addr != "" {
+		ln, err := net.Listen("tcp", cfg.addr)
+		if err != nil {
+			return fail(err)
+		}
+		lns = append(lns, ln)
+		switch {
+		case isLoopback(ln.Addr()):
+		case cfg.requirePass == "":
+			logger.Warn("listening on a non-loopback address without a password; set -requirepass", "addr", ln.Addr().String())
+		default:
+			logger.Warn("clients on a non-loopback address send the password in plain text; serve them on -tls-addr", "addr", ln.Addr().String())
+		}
+	}
+	if cfg.tlsAddr != "" {
+		tc, err := server.TLSConfig(cfg.tlsCert, cfg.tlsKey, cfg.tlsCA, logger)
+		if err != nil {
+			return fail(err)
+		}
+		ln, err := tls.Listen("tcp", cfg.tlsAddr, tc)
+		if err != nil {
+			return fail(err)
+		}
+		lns = append(lns, ln)
+		if cfg.requirePass == "" && cfg.tlsCA == "" && !isLoopback(ln.Addr()) {
+			logger.Warn("TLS clients need neither a password nor a certificate; set -requirepass or -tls-ca", "addr", ln.Addr().String())
+		}
+	}
+	return lns, nil
 }
 
 func applyEnv(fs *flag.FlagSet, lookup func(string) (string, bool)) (shadowed []string, err error) {

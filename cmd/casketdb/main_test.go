@@ -1,11 +1,57 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"flag"
+	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/acneism/casketdb/internal/testcert"
 )
+
+func TestListen(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	for name, cfg := range map[string]config{
+		"no address":                        {},
+		"TLS address without a key":         {tlsAddr: "127.0.0.1:0", tlsCert: "server.crt"},
+		"certificate without a TLS address": {addr: "127.0.0.1:0", tlsCert: "server.crt", tlsKey: "server.key"},
+	} {
+		if lns, err := listen(cfg, logger); err == nil {
+			for _, ln := range lns {
+				ln.Close()
+			}
+			t.Fatalf("%s: listen accepted the flags", name)
+		}
+	}
+	ca := testcert.New(t, "casketdb test ca")
+	cert, key := ca.Issue(t, "server", []string{"localhost"}, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
+	lns, err := listen(config{tlsAddr: "127.0.0.1:0", tlsCert: cert, tlsKey: key}, logger)
+	if err != nil || len(lns) != 1 {
+		t.Fatalf("TLS only: %d listeners, %v", len(lns), err)
+	}
+	defer lns[0].Close()
+	go func() {
+		if c, err := lns[0].Accept(); err == nil {
+			_ = c.(*tls.Conn).Handshake()
+			c.Close()
+		}
+	}()
+	pem, err := os.ReadFile(ca.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(pem)
+	conn, err := tls.Dial("tcp", lns[0].Addr().String(), &tls.Config{RootCAs: pool, ServerName: "localhost"})
+	if err != nil {
+		t.Fatalf("TLS handshake with the listener: %v", err)
+	}
+	conn.Close()
+}
 
 func TestApplyEnv(t *testing.T) {
 	fs := flag.NewFlagSet("casketdb", flag.ContinueOnError)

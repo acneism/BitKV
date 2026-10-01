@@ -6,7 +6,11 @@ CasketDB is configured with command-line flags or the matching [environment vari
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `-addr` | `127.0.0.1:6379` | TCP address for clients. A non-loopback address without a password logs a warning |
+| `-addr` | `127.0.0.1:6379` | TCP address for clients without TLS; empty turns it off. A non-loopback address logs a warning: without a password anyone can connect, with one the password travels in plain text |
+| `-tls-addr` | empty | TCP address for clients over TLS, see [TLS for clients](#tls-for-clients) |
+| `-tls-cert` | empty | PEM certificate for `-tls-addr`, read again whenever its file changes |
+| `-tls-key` | empty | PEM private key of `-tls-cert` |
+| `-tls-ca` | empty | PEM certificates of the CA that signs client certificates. When set, every TLS client must present one |
 | `-requirepass` | empty | Password for `AUTH`. Prefer `CASKETDB_REQUIREPASS`: flags are visible in the process list |
 | `-dir` | `data` | Data directory |
 | `-logs` | `0` (= 4) | Number of parallel logs for a new database. An existing database keeps the number stored in its `META`; a different non-zero value is an error |
@@ -41,6 +45,19 @@ Every flag can also come from an environment variable: `CASKETDB_` and the flag 
 `requirepass`, `appendfsync` and `proto-max-bulk-len` can also be changed at runtime with [`CONFIG SET`](commands.md#server-commands), on one node and until restart.
 
 This is also the way to keep settings in a file: `EnvironmentFile=` in a systemd unit, `--env-file` in Docker. Pass the password as `CASKETDB_REQUIREPASS` rather than `-requirepass`, which the process list shows to every user.
+
+## TLS for clients
+
+`-tls-addr` opens a second listener that speaks TLS 1.2 or 1.3, like `tls-port` in Redis. Both listeners serve the same data, so a node can keep plain text on loopback for local tools and accept everyone else over TLS:
+
+```bash
+casketdb -addr 127.0.0.1:6379 -tls-addr 0.0.0.0:6380 -tls-cert server.crt -tls-key server.key
+redis-cli -p 6380 --tls --cacert ca.crt
+```
+
+`-addr ""` leaves only TLS. With `-tls-ca`, a client must also present a certificate signed by that CA (`redis-cli --tls --cacert ca.crt --cert client.crt --key client.key`); this is in addition to the password, if one is set.
+
+The server reads the certificate and key again when either file changes, at the next connection, so a renewed certificate needs no restart. If the new pair does not load, for example while only one of the two files has been replaced, the server keeps the previous certificate and logs a warning. The CA file is read only at start.
 
 ## Examples
 

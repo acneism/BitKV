@@ -17,7 +17,7 @@ These are deliberate choices, not missing features:
 | Limitation | Possible fix |
 | --- | --- |
 | All keys must fit in RAM: about 80–100 bytes plus the key length per key | Inherent to Bitcask; a disk-based index would be a different engine |
-| One user and one password; no TLS for clients | ACL users and TLS through `crypto/tls` |
+| One user and one password | ACL users |
 | `CONFIG SET` changes one node and lasts until restart | Cluster-wide settings as Raft entries, stored with the data |
 | A cross-log transaction costs two write rounds plus about 60 bytes of header and commit per log | Hash tags like `{user}:…` in Redis Cluster, so that related keys land in one log |
 | With `everysec` or `no`, a power loss can break the atomicity of a cross-log transaction | Fsync the parts before the commit records |

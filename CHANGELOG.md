@@ -2,6 +2,13 @@
 
 Versions are listed newest first. CasketDB was called BitKV up to and including v0.9.
 
+## Unreleased
+
+### Added
+
+- TLS for clients: `-tls-addr` with `-tls-cert` and `-tls-key` opens a listener for TLS 1.2 and 1.3 next to `-addr`, and `-tls-ca` makes clients present a certificate. The certificate is read again when its file changes. `-addr ""` turns plain text off. See [TLS for clients](docs/configuration.md#tls-for-clients).
+- A warning when clients on a non-loopback `-addr` send the password in plain text.
+
 ## v0.12 — 2026-10-01
 
 ### Added

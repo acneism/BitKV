@@ -14,7 +14,7 @@ Include the version or commit, the flags the server ran with, steps to reproduce
 
 Deploy CasketDB with these properties in mind:
 
-- **No TLS.** Client connections, including the password, travel in plain text. Use a private network, a VPN or a TLS-terminating proxy.
+- **TLS for clients.** `-tls-addr` serves clients over TLS 1.2 or 1.3; with `-tls-ca`, every client must also present a certificate signed by that CA. Connections to `-addr` are plain text, password included, so on an untrusted network turn it off with `-addr ""` or keep it on loopback. See [TLS for clients](docs/configuration.md#tls-for-clients).
 - **One password, no users.** `-requirepass` protects every command except AUTH, HELLO and QUIT. There are no per-user permissions: any client that knows the password can also change it, and the sync policy, with `CONFIG SET`. Paths, addresses and TLS files cannot be changed at runtime.
 - **Loopback by default.** The server listens on `127.0.0.1:6379` unless `-addr` says otherwise, and logs a warning if it listens elsewhere without a password.
 - **Metrics without authentication.** The `/metrics` endpoint at `-metrics-addr` answers anyone who can reach it. It reveals counts and sizes, not keys or values; bind it to a loopback or private address.
