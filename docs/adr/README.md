@@ -12,5 +12,6 @@ Each record explains one decision that shapes CasketDB: the context, what was de
 | [6](0006-durable-index-marks.md) | Compacting the Raft log behind the engine's durable index | 2026-09-27 |
 | [7](0007-standard-library-only.md) | The standard library only, outside the Raft adapter | 2026-09-25 |
 | [8](0008-configuration.md) | Flags and environment variables, node-local CONFIG SET | 2026-10-01 |
+| [9](0009-users-in-system-file.md) | Users in a replicated SYSTEM file | 2026-10-01 |
 
 A new record gets the next number and the sections Context, Decision and Consequences. A record is not edited when the decision changes: a new record replaces it, and the old one says so on its status line.

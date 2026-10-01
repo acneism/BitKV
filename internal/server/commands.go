@@ -358,6 +358,7 @@ func configSet(s *Server, c *client, args [][]byte) reply {
 	}
 	var names []string
 	var apply []func()
+	var password *string
 	for i := 0; i < len(args); i += 2 {
 		name, value := strings.ToLower(string(args[i])), string(args[i+1])
 		if slices.Contains(names, name) {
@@ -366,7 +367,8 @@ func configSet(s *Server, c *client, args [][]byte) reply {
 		names = append(names, name)
 		switch name {
 		case "requirepass":
-			apply = append(apply, func() { s.pass.Store(&value); s.users.setPassword(value) })
+			password = &value
+			apply = append(apply, func() { s.pass.Store(&value) })
 		case "appendfsync":
 			p, err := bitcask.ParseSyncPolicy(value)
 			if err != nil {
@@ -381,6 +383,15 @@ func configSet(s *Server, c *client, args [][]byte) reply {
 			apply = append(apply, func() { s.maxBulk.Store(int64(n)) })
 		default:
 			return errorReply("ERR Unknown option or number of arguments for CONFIG SET - '" + truncate(args[i], 128) + "'")
+		}
+	}
+	if password != nil {
+		r := s.changeUsers(func(us *users) string {
+			us.setPassword(*password)
+			return ""
+		})
+		if r != reply(okReply) {
+			return r
 		}
 	}
 	for _, f := range apply {

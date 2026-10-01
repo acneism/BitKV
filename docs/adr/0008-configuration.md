@@ -1,6 +1,6 @@
 # 8. Flags and environment variables, node-local CONFIG SET
 
-Status: accepted, 2026-10-01.
+Status: accepted, 2026-10-01. `requirepass` moved to [ADR 9](0009-users-in-system-file.md).
 
 ## Context
 

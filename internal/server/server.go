@@ -49,6 +49,7 @@ type Server struct {
 	pass    atomic.Pointer[string]
 	users   *users
 	aclLog  aclLog
+	aclMu   sync.Mutex
 	maxBulk atomic.Int64
 	latency histogram
 }
@@ -85,6 +86,10 @@ func New(db *bitcask.DB, cfg Config) *Server {
 	}
 	s.pass.Store(&cfg.RequirePass)
 	s.users = newUsers(cfg.RequirePass)
+	db.WatchSystem(s.loadSystem)
+	if db.System() != nil && cfg.RequirePass != "" {
+		logger.Warn("-requirepass is ignored: users are stored in the database; change the password with CONFIG SET requirepass or ACL SETUSER default")
+	}
 	s.maxBulk.Store(int64(cfg.MaxBulkLen))
 	return s
 }

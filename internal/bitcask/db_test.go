@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1017,6 +1018,38 @@ func TestLinkFilesMakesARestorableCopy(t *testing.T) {
 		t.Fatalf("dumped %d keys, err %v; want 200", n, err)
 	}
 	expectMissing(t, restored, "after")
+}
+
+func TestSystemState(t *testing.T) {
+	dir := t.TempDir()
+	db := mustOpen(t, dir, testOptions())
+	var seen []string
+	db.WatchSystem(func(b []byte) { seen = append(seen, string(b)) })
+	if err := db.SetSystem([]byte(`{"users":{}}`)); err != nil {
+		t.Fatal(err)
+	}
+	snap := t.TempDir()
+	_, files, err := db.LinkFiles(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(files, func(f SnapshotFile) bool { return f.Path == "SYSTEM" && f.Size == 12 }) {
+		t.Fatalf("snapshot files %v lack SYSTEM", files)
+	}
+	mustClose(t, db)
+	db = mustOpen(t, dir, testOptions())
+	if got := string(db.System()); got != `{"users":{}}` {
+		t.Fatalf("system state after reopen = %q", got)
+	}
+	if err := db.SetSystem(nil); err != nil {
+		t.Fatal(err)
+	}
+	mustClose(t, db)
+	db = mustOpen(t, dir, testOptions())
+	defer mustClose(t, db)
+	if db.System() != nil || !slices.Equal(seen, []string{"", `{"users":{}}`}) {
+		t.Fatalf("system state %q after clearing, hook saw %q", db.System(), seen)
+	}
 }
 
 func TestParseSyncPolicy(t *testing.T) {

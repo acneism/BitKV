@@ -220,6 +220,18 @@ func (n *Node) Update(scope bitcask.Scope, fn func(tx *bitcask.Tx) error) error 
 	return err
 }
 
+func (n *Node) SetSystem(b []byte) error {
+	term := n.ready.Load()
+	if term == 0 {
+		return ErrNotLeader
+	}
+	p, err := n.propose(term, append([]byte{kindSystem}, b...))
+	if err != nil {
+		return err
+	}
+	return n.wait(p)
+}
+
 func (n *Node) Flush() error {
 	n.flushMu.Lock()
 	defer n.flushMu.Unlock()

@@ -554,6 +554,36 @@ func TestRestartReplaysOnlyTail(t *testing.T) {
 	}
 }
 
+func TestSystemStateReplicates(t *testing.T) {
+	nodes := newCluster(t, 3, false)
+	l := leader(t, nodes)
+	f := follower(nodes, l)
+	if err := f.node.SetSystem([]byte("v1")); !errors.Is(err, ErrNotLeader) {
+		t.Fatalf("SetSystem on a follower: %v, want ErrNotLeader", err)
+	}
+	must(t, l.node.SetSystem([]byte("v1")))
+	eventually(t, "every node to store v1", func() bool {
+		for _, tn := range nodes {
+			if string(tn.db.System()) != "v1" {
+				return false
+			}
+		}
+		return true
+	})
+	f.stop(t)
+	must(t, l.node.SetSystem([]byte("v2")))
+	for i := range 60 {
+		must(t, put(l, "k"+strconv.Itoa(i), "v"))
+	}
+	compact(t, nodes, l, "fill")
+	f.start(t)
+	eventually(t, "the lagging follower to install a snapshot", func() bool {
+		_, _, ok := latestSnapshot(f)
+		return ok
+	})
+	eventually(t, "the lagging follower to store v2", func() bool { return string(f.db.System()) == "v2" })
+}
+
 func TestLaggingFollowerCatchesUpBySnapshot(t *testing.T) {
 	nodes := newCluster(t, 3, false)
 	l := leader(t, nodes)

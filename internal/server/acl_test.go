@@ -9,6 +9,26 @@ import (
 	"testing"
 )
 
+func TestACLSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	srv, db, addr := startServer(t, dir)
+	admin := dial(t, addr)
+	admin.expect(status("OK"), "ACL", "SETUSER", "carol", "on", ">pw", "~c:*", "+get")
+	admin.expect(status("OK"), "CONFIG", "SET", "requirepass", "secret")
+	stopServer(t, srv, db)
+
+	srv, db, addr = startServer(t, dir)
+	defer stopServer(t, srv, db)
+	c := dial(t, addr)
+	c.expect(errReply("NOAUTH"), "GET", "c:1")
+	c.expect(status("OK"), "AUTH", "carol", "pw")
+	c.expect(nil, "GET", "c:1")
+	c.expect(errReply("NOPERM"), "SET", "c:1", "v")
+	d := dial(t, addr)
+	d.expect(status("OK"), "AUTH", "secret")
+	d.expect([]any{"carol", "default"}, "ACL", "USERS")
+}
+
 func TestACLLog(t *testing.T) {
 	srv, db, addr := startServer(t, t.TempDir())
 	defer stopServer(t, srv, db)

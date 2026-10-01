@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -186,7 +188,7 @@ func (p *perms) keyAllowed(key string) bool {
 	return false
 }
 
-func (p *perms) describe() []string {
+func (p *perms) rules() []string {
 	out := []string{"off"}
 	if p.enabled {
 		out[0] = "on"
@@ -197,26 +199,23 @@ func (p *perms) describe() []string {
 	for _, h := range p.passwords {
 		out = append(out, "#"+hex.EncodeToString(h[:]))
 	}
-	if keys := p.describeKeys(); keys != "" {
-		out = append(out, keys)
-	}
-	return append(out, p.describeCommands())
+	return append(append(out, p.keyRules()...), p.commandRules()...)
 }
 
-func (p *perms) describeKeys() string {
+func (p *perms) keyRules() []string {
 	if p.allKeys {
-		return "~*"
+		return []string{"~*"}
 	}
 	keys := make([]string, len(p.patterns))
 	for i, pattern := range p.patterns {
 		keys[i] = "~" + pattern
 	}
-	return strings.Join(keys, " ")
+	return keys
 }
 
-func (p *perms) describeCommands() string {
+func (p *perms) commandRules() []string {
 	if !slices.Contains(p.commands, false) {
-		return "+@all"
+		return []string{"+@all"}
 	}
 	rules := []string{"-@all"}
 	for _, name := range slices.Sorted(maps.Keys(commands)) {
@@ -224,12 +223,75 @@ func (p *perms) describeCommands() string {
 			rules = append(rules, "+"+name)
 		}
 	}
-	return strings.Join(rules, " ")
+	return rules
 }
 
 type users struct {
 	mu     sync.RWMutex
 	byName map[string]*user
+}
+
+type systemState struct {
+	Users map[string][]string `json:"users"`
+}
+
+func (us *users) clone() *users {
+	us.mu.RLock()
+	defer us.mu.RUnlock()
+	c := &users{byName: make(map[string]*user, len(us.byName))}
+	for name, u := range us.byName {
+		nu := &user{name: name}
+		nu.perms.Store(u.perms.Load().clone())
+		c.byName[name] = nu
+	}
+	return c
+}
+
+func (us *users) encode() ([]byte, error) {
+	st := systemState{Users: map[string][]string{}}
+	us.mu.RLock()
+	for name, u := range us.byName {
+		st.Users[name] = u.perms.Load().rules()
+	}
+	us.mu.RUnlock()
+	return json.Marshal(st)
+}
+
+func (us *users) load(b []byte) error {
+	var st systemState
+	if err := json.Unmarshal(b, &st); err != nil {
+		return err
+	}
+	parsed := make(map[string]*perms, len(st.Users))
+	for name, rules := range st.Users {
+		p := newPerms()
+		for _, rule := range rules {
+			if !p.apply(rule) {
+				return fmt.Errorf("server: stored rule %q of user %s", rule, name)
+			}
+		}
+		parsed[name] = p
+	}
+	if parsed["default"] == nil {
+		return errors.New("server: the stored users lack default")
+	}
+	us.mu.Lock()
+	defer us.mu.Unlock()
+	for name, p := range parsed {
+		u := us.byName[name]
+		if u == nil {
+			u = &user{name: name}
+			us.byName[name] = u
+		}
+		u.perms.Store(p)
+	}
+	for name, u := range us.byName {
+		if parsed[name] == nil {
+			delete(us.byName, name)
+			u.perms.Store(&perms{deleted: true, commands: make([]bool, len(commands))})
+		}
+	}
+	return nil
 }
 
 func newUsers(password string) *users {
@@ -406,6 +468,36 @@ func (l *aclLog) reset() {
 	l.mu.Unlock()
 }
 
+func (s *Server) changeUsers(change func(*users) string) reply {
+	s.aclMu.Lock()
+	defer s.aclMu.Unlock()
+	next := s.users.clone()
+	if msg := change(next); msg != "" {
+		return errorReply(msg)
+	}
+	b, err := next.encode()
+	if err == nil {
+		if rep := s.cfg.Replica; rep != nil {
+			err = rep.SetSystem(b)
+		} else {
+			err = s.db.SetSystem(b)
+		}
+	}
+	if err != nil {
+		return storageError(err)
+	}
+	return okReply
+}
+
+func (s *Server) loadSystem(b []byte) {
+	if len(b) == 0 {
+		return
+	}
+	if err := s.users.load(b); err != nil {
+		s.log.Error("stored users not loaded, keeping the current ones", "err", err)
+	}
+}
+
 func openToEveryone(cmd command, args [][]byte) bool {
 	if cmd.name != "acl" {
 		return false
@@ -424,7 +516,7 @@ func cmdACL(s *Server, c *client, args [][]byte) reply {
 		var out stringsReply
 		for _, name := range s.users.names() {
 			if u := s.users.get(name); u != nil {
-				out = append(out, strings.Join(append([]string{"user", name}, u.perms.Load().describe()...), " "))
+				out = append(out, strings.Join(append([]string{"user", name}, u.perms.Load().rules()...), " "))
 			}
 		}
 		return out
@@ -448,8 +540,8 @@ func cmdACL(s *Server, c *client, args [][]byte) reply {
 		return arrayReply{
 			bulkReply("flags"), flags,
 			bulkReply("passwords"), passwords,
-			bulkReply("commands"), bulkReply(p.describeCommands()),
-			bulkReply("keys"), bulkReply(p.describeKeys()),
+			bulkReply("commands"), bulkReply(strings.Join(p.commandRules(), " ")),
+			bulkReply("keys"), bulkReply(strings.Join(p.keyRules(), " ")),
 			bulkReply("channels"), bulkReply(""),
 			bulkReply("selectors"), arrayReply{},
 		}
@@ -458,19 +550,28 @@ func cmdACL(s *Server, c *client, args [][]byte) reply {
 		for i, a := range args[3:] {
 			rules[i] = string(a)
 		}
-		if msg := s.users.setUser(string(args[2]), rules); msg != "" {
-			return errorReply(msg)
+		name := string(args[2])
+		r := s.changeUsers(func(us *users) string { return us.setUser(name, rules) })
+		if r == reply(okReply) {
+			s.log.Info("ACL user changed", "user", name, "by", c.user.name)
 		}
-		s.log.Info("ACL user changed", "user", string(args[2]), "by", c.user.name)
-		return okReply
+		return r
 	case sub == "DELUSER" && len(args) >= 3:
 		names := make([]string, len(args)-2)
 		for i, a := range args[2:] {
 			names[i] = string(a)
 		}
-		n, ok := s.users.delete(names)
-		if !ok {
-			return errorReply("ERR The 'default' user cannot be removed")
+		n := 0
+		r := s.changeUsers(func(us *users) string {
+			deleted, ok := us.delete(names)
+			if !ok {
+				return "ERR The 'default' user cannot be removed"
+			}
+			n = deleted
+			return ""
+		})
+		if r != reply(okReply) {
+			return r
 		}
 		s.log.Info("ACL users deleted", "users", names, "by", c.user.name)
 		return intReply(n)

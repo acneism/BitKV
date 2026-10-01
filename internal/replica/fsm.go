@@ -18,6 +18,7 @@ import (
 const (
 	kindOps    byte = 1
 	kindFlush  byte = 2
+	kindSystem byte = 3
 	flagDelete byte = 1
 
 	maxField     = 1<<32 - 1
@@ -78,6 +79,13 @@ func (f *bitcaskFSM) Apply(ents []raft.Entry) error {
 				return err
 			}
 			if err := f.db.Flush(); err != nil {
+				return err
+			}
+		case kindSystem:
+			if err := flush(); err != nil {
+				return err
+			}
+			if err := f.db.SetSystem(e.Data[1:]); err != nil {
 				return err
 			}
 		default:
@@ -157,6 +165,9 @@ func (f *bitcaskFSM) Restore(src node.SnapshotSource) error {
 	})
 	if err == nil {
 		err = f.db.Apply(batch, 0)
+	}
+	if err == nil {
+		err = f.db.SetSystem(from.System())
 	}
 	if err == nil {
 		f.db.MarkApplied(src.Meta.Index)

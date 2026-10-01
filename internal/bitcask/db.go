@@ -59,6 +59,10 @@ type DB struct {
 
 	expireCursor int
 
+	sysMu    sync.Mutex
+	system   []byte
+	onSystem func([]byte)
+
 	stop     chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
@@ -117,6 +121,9 @@ func (db *DB) open() error {
 		return err
 	}
 	db.txBase = binary.LittleEndian.Uint64(seed[:])
+	if err := db.loadSystem(); err != nil {
+		return err
+	}
 	return db.load()
 }
 
@@ -375,6 +382,9 @@ func (db *DB) LinkFiles(dir string) (int, []SnapshotFile, error) {
 				}
 			}
 		}
+	}
+	if err := db.linkSystem(add); err != nil {
+		return 0, nil, err
 	}
 	return len(db.groups), files, nil
 }

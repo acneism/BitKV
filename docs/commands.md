@@ -47,13 +47,14 @@ Outside MULTI, KEYS, SCAN and DBSIZE lock one shard at a time. The result is not
 
 ### Access control
 
-Users work as in Redis 6 and later. `default` always exists; `-requirepass` and `CONFIG SET requirepass` set its password. Passwords are stored as SHA-256 hashes.
+Users work as in Redis 6 and later. `default` always exists; `CONFIG SET requirepass` sets its password, and so does `-requirepass` until the first change to users is stored. Passwords are stored as SHA-256 hashes.
+
+Users are kept in the file `SYSTEM` in the data directory and survive restarts; once it exists, `-requirepass` is ignored at start, with a warning. In a cluster a change to users is a Raft entry: run it on the leader, a follower answers `READONLY`, and every node applies it and includes it in snapshots. FLUSHDB does not touch users.
 
 `ACL SETUSER` understands `on`, `off`, `>password`, `<password`, `#hash`, `!hash`, `nopass`, `resetpass`, `~pattern`, `allkeys`, `resetkeys`, `+command`, `-command`, `+@category`, `-@category`, `allcommands`, `nocommands` and `reset`. A new user starts `off`, without passwords, keys or commands. The categories are `keyspace`, `read`, `write`, `string`, `fast`, `slow`, `admin`, `dangerous`, `connection` and `transaction`, assigned as in Redis; `RAFT` is `@admin` and `@dangerous`. A denied command answers `NOPERM`, and inside MULTI it aborts EXEC. `ACL LOG [count|RESET]` lists the latest denials of commands, keys and logins on this node, newest first, up to 128; a repeat within a minute adds to the count of its entry.
 
 Differences from Redis:
 
-- Users live in memory on the node where they were created and are lost at restart. In a cluster, create them on every node.
 - Read-only and write-only key patterns (`%R~`, `%W~`), channels (`&`), selectors and rules for single subcommands (`+config|get`) are not supported.
 - `ACL SAVE`, `ACL LOAD`, `ACL GENPASS` and `ACL DRYRUN` are missing.
 - `ACL WHOAMI` and `ACL CAT` are open to every authenticated user; the other ACL subcommands need the `acl` command.
@@ -64,7 +65,7 @@ Differences from Redis:
 - `SAVE` forces an fsync of all logs. There is no RDB file.
 - `BGREWRITEAOF` starts a merge (compaction) of all logs.
 - `CONFIG GET` answers `appendonly`, `appendfsync`, `save`, `databases`, `proto-max-bulk-len` and `requirepass`.
-- `CONFIG SET` changes `requirepass`, `appendfsync` and `proto-max-bulk-len`, several at once and all or none. As in Redis, it changes only the node it runs on: in a cluster, run it on every node. The change lasts until restart, and there is no config file for `CONFIG REWRITE` to write; keep settings in [flags or `CASKETDB_` variables](configuration.md). A new password does not log out open connections, and a new `proto-max-bulk-len` applies to new connections.
+- `CONFIG SET` changes `requirepass`, `appendfsync` and `proto-max-bulk-len`, several at once and all or none. `requirepass` is the password of the `default` user: it is stored and, in a cluster, replicated like other changes to users. `appendfsync` and `proto-max-bulk-len` change only the node it runs on, as in Redis, until restart; there is no config file for `CONFIG REWRITE` to write, so keep them in [flags or `CASKETDB_` variables](configuration.md). A new password does not log out open connections, and a new `proto-max-bulk-len` applies to new connections.
 - `COMMAND` returns an empty list and `COMMAND COUNT` the number of commands. Both exist so that `redis-cli` and `redis-benchmark` start.
 - `FLUSHDB` and `FLUSHALL` do the same thing.
 
