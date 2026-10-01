@@ -320,7 +320,7 @@ func permission(c *client, cmd command, args [][]byte) string {
 	switch {
 	case p.all:
 		return ""
-	case !p.commands[cmd.id] && !(cmd.name == "acl" && (upper(args[1]) == "WHOAMI" || upper(args[1]) == "CAT")):
+	case !p.commands[cmd.id] && !openToEveryone(cmd, args):
 		return "NOPERM User " + c.user.name + " has no permissions to run the '" + cmd.name + "' command"
 	}
 	var kb [8]string
@@ -330,6 +330,14 @@ func permission(c *client, cmd command, args [][]byte) string {
 		}
 	}
 	return ""
+}
+
+func openToEveryone(cmd command, args [][]byte) bool {
+	if cmd.name != "acl" {
+		return false
+	}
+	sub := upper(args[1])
+	return sub == "WHOAMI" || sub == "CAT"
 }
 
 func cmdACL(s *Server, c *client, args [][]byte) reply {
