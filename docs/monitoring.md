@@ -67,4 +67,24 @@ The first is the 99th percentile command time, the second the average fsync time
 
 The server logs to standard error, one record per line: key=value text by default, JSON with `-log-format json`. `-log-level` picks the lowest level written: `debug`, `info` (default), `warn` or `error`. Messages from the Raft library carry `component=raft`.
 
+### Audit records
+
+Logins and administrative actions are logged with `component=audit`, the user who acted and the client's address:
+
+```text
+time=2026-10-01T15:04:05.000+00:00 level=INFO msg="ACL user changed" component=audit user=default client=10.0.0.7:52144 target=app rules="[on >*** ~app:* +@read]"
+```
+
+| Message | Level | Logged when | Other fields |
+| --- | --- | --- | --- |
+| `AUTH succeeded` | info | `AUTH` or `HELLO … AUTH` signs a client in | `user` is the user signed in |
+| `AUTH failed` | warn | The user is unknown or disabled, or the password is wrong | `user` is the name tried, cut to 64 bytes |
+| `ACL user changed` | info | `ACL SETUSER` | `target`; `rules`, with passwords and hashes shown as `>***`, `<***`, `#***`, `!***` |
+| `ACL users deleted` | info | `ACL DELUSER` | `targets`, `deleted` |
+| `config changed` | info | `CONFIG SET` | `params`, the names without values |
+| `database flushed` | info | `FLUSHDB`, `FLUSHALL` | |
+| `RAFT command` | info | `RAFT TRANSFER`, `ADDLEARNER`, `PROMOTE` or `REMOVE` succeeds | `command` |
+
+A node logs what ran on it: in a cluster, a change to users or a FLUSHDB appears only in the log of the leader that ran it. Attempts refused by the [AUTH limit](configuration.md#client-limits) and commands denied by ACL are not logged; `ACL LOG` lists the denials. Every successful AUTH writes a line, so clients that open a connection per request fill the log quickly; `-log-level warn` keeps the failed logins but drops the info records too.
+
 `INFO` answers most of the counters and gauges in the Redis format, but not the latency histogram, the fsync time or the Raft commit and last index.

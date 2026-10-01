@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net"
 	"slices"
@@ -361,8 +363,20 @@ type failures struct {
 }
 
 func (s *Server) login(c *client, name string, pass []byte) (*user, reply) {
-	host, now := hostOf(c.conn.RemoteAddr()), time.Now()
-	t := &s.throttle
+	u, allowed := s.throttle.attempt(hostOf(c.conn.RemoteAddr()), time.Now(), func() *user { return s.users.authenticate(name, pass) })
+	switch {
+	case !allowed:
+		return nil, errorReply(errAuthLimit)
+	case u == nil:
+		s.aclLog.add("auth", "AUTH", name, c)
+		s.audit(c, slog.LevelWarn, "AUTH failed", name[:min(len(name), 64)])
+		return nil, errorReply(errWrongPass)
+	}
+	s.audit(c, slog.LevelInfo, "AUTH succeeded", u.name)
+	return u, nil
+}
+
+func (t *authThrottle) attempt(host string, now time.Time, check func() *user) (*user, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	f := t.hosts[host]
@@ -370,19 +384,22 @@ func (s *Server) login(c *client, name string, pass []byte) (*user, reply) {
 		f = failures{until: now.Add(authWindow)}
 	}
 	if f.n >= authFailures {
-		return nil, errorReply(errAuthLimit)
+		return nil, false
 	}
-	if u := s.users.authenticate(name, pass); u != nil {
-		return u, nil
+	u := check()
+	if u == nil {
+		if now.Sub(t.swept) >= authWindow {
+			maps.DeleteFunc(t.hosts, func(_ string, f failures) bool { return !now.Before(f.until) })
+			t.swept = now
+		}
+		f.n++
+		t.hosts[host] = f
 	}
-	if now.Sub(t.swept) >= authWindow {
-		maps.DeleteFunc(t.hosts, func(_ string, f failures) bool { return !now.Before(f.until) })
-		t.swept = now
-	}
-	f.n++
-	t.hosts[host] = f
-	s.aclLog.add("auth", "AUTH", name, c)
-	return nil, errorReply(errWrongPass)
+	return u, true
+}
+
+func (s *Server) audit(c *client, level slog.Level, msg, user string, args ...any) {
+	s.log.Log(context.Background(), level, msg, append([]any{"component", "audit", "user", user, "client", c.conn.RemoteAddr().String()}, args...)...)
 }
 
 func hostOf(addr net.Addr) string {
@@ -607,7 +624,13 @@ func cmdACL(s *Server, c *client, args [][]byte) reply {
 		name := string(args[2])
 		r := s.changeUsers(func(us *users) string { return us.setUser(name, rules) })
 		if r == reply(okReply) {
-			s.log.Info("ACL user changed", "user", name, "by", c.user.name)
+			shown := slices.Clone(rules)
+			for i, rule := range shown {
+				if rule != "" && strings.IndexByte("><#!", rule[0]) >= 0 {
+					shown[i] = rule[:1] + "***"
+				}
+			}
+			s.audit(c, slog.LevelInfo, "ACL user changed", c.user.name, "target", name, "rules", shown)
 		}
 		return r
 	case sub == "DELUSER" && len(args) >= 3:
@@ -627,7 +650,7 @@ func cmdACL(s *Server, c *client, args [][]byte) reply {
 		if r != reply(okReply) {
 			return r
 		}
-		s.log.Info("ACL users deleted", "users", names, "by", c.user.name)
+		s.audit(c, slog.LevelInfo, "ACL users deleted", c.user.name, "targets", names, "deleted", n)
 		return intReply(n)
 	case sub == "LOG" && len(args) == 2:
 		return s.aclLog.reply(10)

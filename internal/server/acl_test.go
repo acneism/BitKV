@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -27,6 +29,38 @@ func TestACLSurvivesRestart(t *testing.T) {
 	d := dial(t, addr)
 	d.expect(status("OK"), "AUTH", "secret")
 	d.expect([]any{"carol", "default"}, "ACL", "USERS")
+}
+
+func TestAudit(t *testing.T) {
+	var log bytes.Buffer
+	srv, db, addr := startServerWith(t, t.TempDir(), Config{Logger: slog.New(slog.NewTextHandler(&log, nil))})
+	c := dial(t, addr)
+	c.expect(status("OK"), "ACL", "SETUSER", "ops", "on", ">s3cret", "~*", "+@all")
+	c.expect(status("OK"), "CONFIG", "SET", "requirepass", "pw")
+	c.expect(errReply("WRONGPASS"), "AUTH", "ops", "nope")
+	c.expect(status("OK"), "AUTH", "ops", "s3cret")
+	c.expect(status("OK"), "FLUSHDB")
+	c.expect(int64(0), "ACL", "DELUSER", "nobody")
+	stopServer(t, srv, db)
+
+	got := log.String()
+	for _, want := range []string{
+		`level=INFO msg="ACL user changed" component=audit user=default client=127.0.0.1:`,
+		`target=ops rules="[on >*** ~* +@all]"`,
+		`msg="config changed" component=audit user=default client=127.0.0.1:`,
+		`level=WARN msg="AUTH failed" component=audit user=ops`,
+		`level=INFO msg="AUTH succeeded" component=audit user=ops`,
+		`msg="database flushed" component=audit user=ops`,
+		`msg="ACL users deleted" component=audit user=ops client=127.0.0.1:`,
+		`targets=[nobody] deleted=0`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("log has no %s:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "s3cret") || strings.Contains(got, "nope") {
+		t.Fatalf("a password reached the log:\n%s", got)
+	}
 }
 
 func TestACLLog(t *testing.T) {

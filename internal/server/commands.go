@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	"runtime"
@@ -396,7 +397,7 @@ func configSet(s *Server, c *client, args [][]byte) reply {
 	for _, f := range apply {
 		f()
 	}
-	s.log.Info("config changed", "params", names, "client", c.conn.RemoteAddr().String())
+	s.audit(c, slog.LevelInfo, "config changed", c.user.name, "params", names)
 	return okReply
 }
 
@@ -475,6 +476,7 @@ func cmdFlush(s *Server, c *client, args [][]byte) reply {
 	if err := s.flush(); err != nil {
 		return storageError(err)
 	}
+	s.audit(c, slog.LevelInfo, "database flushed", c.user.name)
 	return okReply
 }
 

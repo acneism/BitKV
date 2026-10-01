@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/acneism/casketdb/internal/replica"
 )
@@ -46,6 +48,7 @@ func cmdRaft(s *Server, c *client, args [][]byte) reply {
 	if err != nil {
 		return raftError(rep, err)
 	}
+	s.audit(c, slog.LevelInfo, "RAFT command", c.user.name, "command", string(bytes.Join(args[1:], []byte(" "))))
 	return okReply
 }
 

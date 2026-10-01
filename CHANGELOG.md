@@ -11,6 +11,7 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 - ACL users: `ACL SETUSER`, `GETUSER`, `DELUSER`, `LIST`, `USERS`, `WHOAMI`, `CAT` and `LOG`, `AUTH <user> <password>`, permissions by command, category and key pattern, `NOPERM` replies. Users are stored in the data directory and, in a cluster, replicated through Raft; `CONFIG SET requirepass` is now stored and replicated too. See [access control](docs/commands.md#access-control).
 - Protected mode, on by default as in Redis: while the `default` user has no password, clients from other hosts get `DENIED` and are disconnected. `-protected-mode=false` turns it off. See [protected mode](docs/configuration.md#protected-mode).
 - Client limits: `-maxclients`, 10,000 by default as in Redis, and `-timeout` for idle clients, off by default. After 10 failed `AUTH` attempts from one address within a second, the rest of that second's attempts from it are refused. `INFO` shows `maxclients` and `rejected_connections`, and the metric `casketdb_rejected_connections_total` counts refused connections. See [client limits](docs/configuration.md#client-limits).
+- Audit records in the server log, marked `component=audit`: successful and failed AUTH, `ACL SETUSER` and `DELUSER`, `CONFIG SET`, FLUSHDB and FLUSHALL, and the RAFT commands that change the cluster, each with the user and the client's address. See [audit records](docs/monitoring.md#audit-records).
 
 ### Upgrading from v0.12
 
