@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	Version      = "0.11.1"
+	Version      = "0.12.0"
 	redisVersion = "7.2.0"
 )
 

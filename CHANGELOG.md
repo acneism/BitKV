@@ -2,7 +2,7 @@
 
 Versions are listed newest first. CasketDB was called BitKV up to and including v0.9.
 
-## Unreleased
+## v0.12 — 2026-10-01
 
 ### Added
 
@@ -14,6 +14,14 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 ### Fixed
 
 - The server reports a failure to close the database or the Raft node when it cannot start.
+
+### Known issues
+
+- Once the Raft log has been compacted, a learner added after the leader took its latest snapshot cannot catch up until the log is compacted past that snapshot, so `RAFT PROMOTE` times out. The fix belongs in the Raft library; see [limitations](docs/limitations.md).
+
+### Upgrading from v0.11
+
+- The data format and the wire protocol between nodes are unchanged: upgrade nodes one at a time.
 
 ## v0.11.1 — 2026-09-30
 
