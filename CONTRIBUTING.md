@@ -127,4 +127,4 @@ Handle every error. When ignoring one is right, say so with `_ =`. The linter do
 
 ## Where to start reading
 
-[Architecture](docs/architecture.md) describes the packages, the write and read paths, and the on-disk format.
+[Architecture](docs/architecture.md) describes the packages, the write and read paths, and the on-disk format. The [architecture decisions](docs/adr/README.md) explain why; a change that reverses one, or makes a new choice of the same weight, adds a record there.

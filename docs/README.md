@@ -14,6 +14,7 @@ Start with the [project README](../README.md) for a quick start.
 ## Inside CasketDB
 
 - [Architecture](architecture.md) — packages, transactions, logs, reads, expiry, merge, replication internals, on-disk format
+- [Architecture decisions](adr/README.md) — why the engine, the protocol, the locking, the logs and the replication are the way they are
 - [Benchmarks](benchmarks.md) — measured numbers and how to compare builds
 
 ## Project
