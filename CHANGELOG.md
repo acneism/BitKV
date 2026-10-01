@@ -2,7 +2,7 @@
 
 Versions are listed newest first. CasketDB was called BitKV up to and including v0.9.
 
-## Unreleased
+## v0.13 — 2026-10-01
 
 ### Added
 
@@ -21,8 +21,13 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 
 - A Raft entry or a snapshot's file list that declared a field longer than the data that followed made a node allocate up to 4 GB before it failed. Found while adding fuzz tests of the decoders, which now run in CI and nightly.
 
+### Known issues
+
+- Still open from v0.12: a learner added after the leader took its latest snapshot cannot catch up until the log is compacted past that snapshot, so `RAFT PROMOTE` times out. See [limitations](docs/limitations.md).
+
 ### Upgrading from v0.12
 
+- Data directories open unchanged, and a cluster can be upgraded one node at a time.
 - A server that listens on a non-loopback address without a password now refuses clients from other hosts. Set a password, or start it with `-protected-mode=false` (`CASKETDB_PROTECTED_MODE=false`) where every client that can reach it is trusted.
 - At most 10,000 clients connect at once; raise `-maxclients` if a node serves more.
 - Once users are stored, `-requirepass` is ignored at start; the stored `default` user decides.
