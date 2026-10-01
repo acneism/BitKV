@@ -1,6 +1,6 @@
 # Contributing to CasketDB
 
-Thanks for helping. This page explains how to report problems, build and test CasketDB, and what a change needs before it is merged.
+Thanks for helping. This page explains how to report problems, build and test CasketDB, and what a change needs before it is merged. Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Reporting bugs
 

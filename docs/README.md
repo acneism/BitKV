@@ -21,5 +21,6 @@ Start with the [project README](../README.md) for a quick start.
 ## Project
 
 - [Contributing](../CONTRIBUTING.md)
+- [Code of conduct](../CODE_OF_CONDUCT.md)
 - [Security policy](../SECURITY.md)
 - [Changelog](../CHANGELOG.md)
