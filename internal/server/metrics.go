@@ -19,8 +19,17 @@ var latencyBounds = [...]time.Duration{
 
 var epoch = time.Now()
 
-func elapsed() time.Duration {
+func (s *Server) clock() time.Duration {
+	if !s.cfg.TrackLatency {
+		return 0
+	}
 	return time.Since(epoch)
+}
+
+func (s *Server) observe(start time.Duration, n int) {
+	if s.cfg.TrackLatency {
+		s.latency.observe(time.Since(epoch)-start, n)
+	}
 }
 
 type histogram struct {

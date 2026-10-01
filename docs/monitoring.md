@@ -15,6 +15,8 @@ scrape_configs:
       - targets: ["10.0.0.1:9121", "10.0.0.2:9121", "10.0.0.3:9121"]
 ```
 
+The server times commands only while `-metrics-addr` is set. Timing costs about 100 ns per command run on its own, 10–15% of a pipelined GET served from memory and a negligible part of a request that crosses the network. A pipelined batch of writes is timed once.
+
 The endpoint has no authentication. Bind it to a loopback or private address, or put it behind a firewall. It reveals counts and sizes, not keys or values.
 
 | Metric | Type | Meaning |

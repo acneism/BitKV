@@ -586,7 +586,7 @@ func TestConfigSet(t *testing.T) {
 }
 
 func TestMetrics(t *testing.T) {
-	srv, db, addr := startServer(t, t.TempDir())
+	srv, db, addr := startServerWith(t, t.TempDir(), Config{TrackLatency: true})
 	defer stopServer(t, srv, db)
 	c := dial(t, addr)
 	c.expect(status("OK"), "SET", "k", "v")

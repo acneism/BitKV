@@ -24,10 +24,11 @@ const (
 var ErrServerClosed = errors.New("server: closed")
 
 type Config struct {
-	MaxBulkLen  int
-	RequirePass string
-	Logger      *slog.Logger
-	Replica     *replica.Node
+	MaxBulkLen   int
+	RequirePass  string
+	Logger       *slog.Logger
+	Replica      *replica.Node
+	TrackLatency bool
 }
 
 type Server struct {
@@ -235,12 +236,12 @@ func (s *Server) runBatch(c *client, batch []queued) {
 		keys = q.cmd.keys.extract(q.args, keys)
 	}
 	var replies arrayReply
-	start := elapsed()
+	start := s.clock()
 	err := s.update(bitcask.Keys(keys...), func(tx *bitcask.Tx) (err error) {
 		replies, err = runQueue(tx, batch)
 		return err
 	})
-	s.latency.observe(elapsed()-start, len(batch))
+	s.observe(start, len(batch))
 	s.processed.Add(int64(len(batch)))
 	for i := range batch {
 		if err != nil {
@@ -283,9 +284,9 @@ func (s *Server) execute(c *client, args [][]byte) {
 		return
 	}
 	s.processed.Add(1)
-	start := elapsed()
+	start := s.clock()
 	r := s.run(c, cmd, args)
-	s.latency.observe(elapsed()-start, 1)
+	s.observe(start, 1)
 	r.writeTo(c.w)
 }
 

@@ -131,7 +131,7 @@ func run(logger *slog.Logger, cfg config) error {
 	if cfg.requirePass == "" && !isLoopback(ln.Addr()) {
 		logger.Warn("listening on a non-loopback address without a password; set -requirepass", "addr", ln.Addr().String())
 	}
-	srv := server.New(db, server.Config{MaxBulkLen: cfg.maxBulk, RequirePass: cfg.requirePass, Logger: logger, Replica: rep})
+	srv := server.New(db, server.Config{MaxBulkLen: cfg.maxBulk, RequirePass: cfg.requirePass, Logger: logger, Replica: rep, TrackLatency: cfg.metricsAddr != ""})
 	var metrics *http.Server
 	if cfg.metricsAddr != "" {
 		mln, err := net.Listen("tcp", cfg.metricsAddr)
