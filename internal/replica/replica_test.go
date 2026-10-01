@@ -523,7 +523,9 @@ func TestCompactsWithoutSnapshots(t *testing.T) {
 }
 
 func TestRestartReplaysOnlyTail(t *testing.T) {
-	nodes := newCluster(t, 3, false)
+	nodes := newCluster(t, 3, false, func(tn *testNode) {
+		tn.tune = func(c *node.Config) { c.CompactEntries = 1 << 16 }
+	})
 	l := leader(t, nodes)
 	for i := range 50 {
 		must(t, put(l, "k"+strconv.Itoa(i), "v"))
