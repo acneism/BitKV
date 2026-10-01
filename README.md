@@ -54,16 +54,16 @@ redis-cli SET greeting hello
 redis-cli GET greeting
 ```
 
-The server listens on `127.0.0.1:6379` by default; change it with `-addr`. On a non-loopback address, set a password with `-requirepass` or the `CASKETDB_REQUIREPASS` environment variable; without one CasketDB logs a warning. All flags are listed in [configuration](docs/configuration.md).
+The server listens on `127.0.0.1:6379` by default; change it with `-addr`. On a non-loopback address, set a password with `-requirepass` or the `CASKETDB_REQUIREPASS` environment variable; without one, [protected mode](docs/configuration.md#protected-mode) refuses clients from other hosts. All flags are listed in [configuration](docs/configuration.md).
 
 ## Running a cluster
 
-Start three nodes with the same `-raft-peers` and empty directories. The cluster forms by itself:
+Start three nodes with the same `-raft-peers`, the same password and empty directories. The cluster forms by itself:
 
 ```bash
-casketdb -addr 10.0.0.1:6379 -dir data -raft-id n1 -raft-peers n1=10.0.0.1:7000,n2=10.0.0.2:7000,n3=10.0.0.3:7000
-casketdb -addr 10.0.0.2:6379 -dir data -raft-id n2 -raft-peers n1=10.0.0.1:7000,n2=10.0.0.2:7000,n3=10.0.0.3:7000
-casketdb -addr 10.0.0.3:6379 -dir data -raft-id n3 -raft-peers n1=10.0.0.1:7000,n2=10.0.0.2:7000,n3=10.0.0.3:7000
+CASKETDB_REQUIREPASS=secret casketdb -addr 10.0.0.1:6379 -dir data -raft-id n1 -raft-peers n1=10.0.0.1:7000,n2=10.0.0.2:7000,n3=10.0.0.3:7000
+CASKETDB_REQUIREPASS=secret casketdb -addr 10.0.0.2:6379 -dir data -raft-id n2 -raft-peers n1=10.0.0.1:7000,n2=10.0.0.2:7000,n3=10.0.0.3:7000
+CASKETDB_REQUIREPASS=secret casketdb -addr 10.0.0.3:6379 -dir data -raft-id n3 -raft-peers n1=10.0.0.1:7000,n2=10.0.0.2:7000,n3=10.0.0.3:7000
 ```
 
 Only the leader accepts writes; followers answer `-READONLY`. `INFO replication` shows the leader's id and address. Every node serves reads: by default they may lag behind the leader, and with `-raft-reads linearizable` they reflect every acknowledged write. Nodes can be added and removed at runtime with `RAFT` commands, and talk to each other over mutual TLS with `-raft-tls-*`. Details are in [replication](docs/replication.md).

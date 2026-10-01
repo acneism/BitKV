@@ -44,6 +44,7 @@ type config struct {
 	tlsCert     string
 	tlsKey      string
 	tlsCA       string
+	protected   bool
 	logLevel    string
 	logFormat   string
 	opts        bitcask.Options
@@ -65,6 +66,7 @@ func main() {
 	flag.IntVar(&cfg.opts.Logs, "logs", 0, "number of parallel data logs for a new database (0 means 4; an existing database keeps its own)")
 	flag.IntVar(&cfg.maxBulk, "proto-max-bulk-len", 512<<20, "maximum bulk string length in bytes")
 	flag.StringVar(&cfg.requirePass, "requirepass", "", "password clients must AUTH with")
+	flag.BoolVar(&cfg.protected, "protected-mode", true, "while the default user has no password, refuse clients that connect from other hosts")
 	flag.StringVar(&cfg.raftID, "raft-id", "", "raft node id; enables replication")
 	flag.StringVar(&cfg.raftPeers, "raft-peers", "", "all raft nodes including this one: id=host:port,id=host:port")
 	flag.StringVar(&cfg.raftDir, "raft-dir", "", "raft log and snapshot directory (default <dir>/raft)")
@@ -132,11 +134,11 @@ func run(logger *slog.Logger, cfg config) error {
 		}
 	}
 
-	lns, err := listen(cfg, logger)
+	srv := server.New(db, server.Config{MaxBulkLen: cfg.maxBulk, RequirePass: cfg.requirePass, Logger: logger, Replica: rep, TrackLatency: cfg.metricsAddr != "", ProtectedMode: cfg.protected})
+	lns, err := listen(cfg, logger, srv.AuthRequired())
 	if err != nil {
 		return errors.Join(err, closeStore(rep, db))
 	}
-	srv := server.New(db, server.Config{MaxBulkLen: cfg.maxBulk, RequirePass: cfg.requirePass, Logger: logger, Replica: rep, TrackLatency: cfg.metricsAddr != ""})
 	var metrics *http.Server
 	if cfg.metricsAddr != "" {
 		mln, err := net.Listen("tcp", cfg.metricsAddr)
@@ -156,7 +158,7 @@ func run(logger *slog.Logger, cfg config) error {
 		logger.Info("metrics endpoint ready", "url", "http://"+mln.Addr().String()+"/metrics")
 	}
 	serveErr := make(chan error, len(lns))
-	attrs := []any{"appendfsync", policy.String(), "auth", cfg.requirePass != "", "version", server.Version}
+	attrs := []any{"appendfsync", policy.String(), "auth", srv.AuthRequired(), "version", server.Version}
 	for i, ln := range lns {
 		key := "addr"
 		if cfg.tlsAddr != "" && i == len(lns)-1 {
@@ -190,7 +192,7 @@ func run(logger *slog.Logger, cfg config) error {
 	return err
 }
 
-func listen(cfg config, logger *slog.Logger) ([]net.Listener, error) {
+func listen(cfg config, logger *slog.Logger, auth bool) ([]net.Listener, error) {
 	switch {
 	case cfg.addr == "" && cfg.tlsAddr == "":
 		return nil, errors.New("set -addr, -tls-addr or both")
@@ -213,11 +215,11 @@ func listen(cfg config, logger *slog.Logger) ([]net.Listener, error) {
 		}
 		lns = append(lns, ln)
 		switch {
-		case isLoopback(ln.Addr()):
-		case cfg.requirePass == "":
-			logger.Warn("listening on a non-loopback address without a password; set -requirepass", "addr", ln.Addr().String())
-		default:
+		case server.IsLoopback(ln.Addr()):
+		case auth:
 			logger.Warn("clients on a non-loopback address send the password in plain text; serve them on -tls-addr", "addr", ln.Addr().String())
+		default:
+			warnNoPassword(logger, cfg, ln.Addr())
 		}
 	}
 	if cfg.tlsAddr != "" {
@@ -230,11 +232,19 @@ func listen(cfg config, logger *slog.Logger) ([]net.Listener, error) {
 			return fail(err)
 		}
 		lns = append(lns, ln)
-		if cfg.requirePass == "" && cfg.tlsCA == "" && !isLoopback(ln.Addr()) {
-			logger.Warn("TLS clients need neither a password nor a certificate; set -requirepass or -tls-ca", "addr", ln.Addr().String())
+		if !auth && !server.IsLoopback(ln.Addr()) && (cfg.protected || cfg.tlsCA == "") {
+			warnNoPassword(logger, cfg, ln.Addr())
 		}
 	}
 	return lns, nil
+}
+
+func warnNoPassword(logger *slog.Logger, cfg config, addr net.Addr) {
+	if cfg.protected {
+		logger.Warn("protected mode: the default user has no password, so clients from other hosts are refused; set a password or -protected-mode=false", "addr", addr.String())
+	} else {
+		logger.Warn("clients from other hosts need no password; set -requirepass", "addr", addr.String())
+	}
 }
 
 func applyEnv(fs *flag.FlagSet, lookup func(string) (string, bool)) (shadowed []string, err error) {
@@ -254,11 +264,6 @@ func applyEnv(fs *flag.FlagSet, lookup func(string) (string, bool)) (shadowed []
 		}
 	})
 	return shadowed, err
-}
-
-func isLoopback(addr net.Addr) bool {
-	tcp, ok := addr.(*net.TCPAddr)
-	return ok && tcp.IP.IsLoopback()
 }
 
 func loopbackPeer(peers, id string) bool {

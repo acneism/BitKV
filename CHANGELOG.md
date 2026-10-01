@@ -9,9 +9,11 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 - TLS for clients: `-tls-addr` with `-tls-cert` and `-tls-key` opens a listener for TLS 1.2 and 1.3 next to `-addr`, and `-tls-ca` makes clients present a certificate. The certificate is read again when its file changes. `-addr ""` turns plain text off. See [TLS for clients](docs/configuration.md#tls-for-clients).
 - A warning when clients on a non-loopback `-addr` send the password in plain text.
 - ACL users: `ACL SETUSER`, `GETUSER`, `DELUSER`, `LIST`, `USERS`, `WHOAMI`, `CAT` and `LOG`, `AUTH <user> <password>`, permissions by command, category and key pattern, `NOPERM` replies. Users are stored in the data directory and, in a cluster, replicated through Raft; `CONFIG SET requirepass` is now stored and replicated too. See [access control](docs/commands.md#access-control).
+- Protected mode, on by default as in Redis: while the `default` user has no password, clients from other hosts get `DENIED` and are disconnected. `-protected-mode=false` turns it off. See [protected mode](docs/configuration.md#protected-mode).
 
 ### Upgrading from v0.12
 
+- A server that listens on a non-loopback address without a password now refuses clients from other hosts. Set a password, or start it with `-protected-mode=false` (`CASKETDB_PROTECTED_MODE=false`) where every client that can reach it is trusted.
 - Once users are stored, `-requirepass` is ignored at start; the stored `default` user decides.
 - In a cluster, upgrade every node before the first `ACL SETUSER`, `ACL DELUSER` or `CONFIG SET requirepass`: a v0.12 node stops at the new kind of Raft entry they write.
 

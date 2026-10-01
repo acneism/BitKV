@@ -6,12 +6,13 @@ CasketDB is configured with command-line flags or the matching [environment vari
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `-addr` | `127.0.0.1:6379` | TCP address for clients without TLS; empty turns it off. A non-loopback address logs a warning: without a password anyone can connect, with one the password travels in plain text |
+| `-addr` | `127.0.0.1:6379` | TCP address for clients without TLS; empty turns it off. A non-loopback address logs a warning: with a password, it travels in plain text; without one, [protected mode](#protected-mode) refuses clients from other hosts |
 | `-tls-addr` | empty | TCP address for clients over TLS, see [TLS for clients](#tls-for-clients) |
 | `-tls-cert` | empty | PEM certificate for `-tls-addr`, read again whenever its file changes |
 | `-tls-key` | empty | PEM private key of `-tls-cert` |
 | `-tls-ca` | empty | PEM certificates of the CA that signs client certificates. When set, every TLS client must present one |
-| `-requirepass` | empty | Password for `AUTH`. Prefer `CASKETDB_REQUIREPASS`: flags are visible in the process list |
+| `-requirepass` | empty | Password of the `default` user for `AUTH`, ignored once users are stored, see [access control](commands.md#access-control). Prefer `CASKETDB_REQUIREPASS`: flags are visible in the process list |
+| `-protected-mode` | `true` | While the `default` user has no password, refuse clients that connect from other hosts, see [protected mode](#protected-mode). `-protected-mode=false` turns it off |
 | `-dir` | `data` | Data directory |
 | `-logs` | `0` (= 4) | Number of parallel logs for a new database. An existing database keeps the number stored in its `META`; a different non-zero value is an error |
 | `-appendfsync` | `everysec` | `always`, `everysec` or `no`, see [persistence](persistence.md) |
@@ -42,7 +43,7 @@ Sizes are given in bytes, for example `-max-file-size 134217728` for 128 MB. Dur
 
 Every flag can also come from an environment variable: `CASKETDB_` and the flag name in upper case, with dashes turned into underscores. `-raft-peers` is `CASKETDB_RAFT_PEERS`, `-appendfsync` is `CASKETDB_APPENDFSYNC`. A flag on the command line wins over the variable, and the server logs a warning naming the variable it ignored. A value the flag does not accept stops the server with the variable's name in the error.
 
-`requirepass`, `appendfsync` and `proto-max-bulk-len` can also be changed at runtime with [`CONFIG SET`](commands.md#server-commands), on one node and until restart.
+`appendfsync` and `proto-max-bulk-len` can also be changed at runtime with [`CONFIG SET`](commands.md#server-commands), on one node and until restart. `CONFIG SET requirepass` stores the password of the `default` user with the other users, see [access control](commands.md#access-control).
 
 This is also the way to keep settings in a file: `EnvironmentFile=` in a systemd unit, `--env-file` in Docker. Pass the password as `CASKETDB_REQUIREPASS` rather than `-requirepass`, which the process list shows to every user.
 
@@ -51,13 +52,19 @@ This is also the way to keep settings in a file: `EnvironmentFile=` in a systemd
 `-tls-addr` opens a second listener that speaks TLS 1.2 or 1.3, like `tls-port` in Redis. Both listeners serve the same data, so a node can keep plain text on loopback for local tools and accept everyone else over TLS:
 
 ```bash
-casketdb -addr 127.0.0.1:6379 -tls-addr 0.0.0.0:6380 -tls-cert server.crt -tls-key server.key
-redis-cli -p 6380 --tls --cacert ca.crt
+CASKETDB_REQUIREPASS=secret casketdb -addr 127.0.0.1:6379 -tls-addr 0.0.0.0:6380 -tls-cert server.crt -tls-key server.key
+redis-cli -h db.example.com -p 6380 --tls --cacert ca.crt --askpass
 ```
 
-`-addr ""` leaves only TLS. With `-tls-ca`, a client must also present a certificate signed by that CA (`redis-cli --tls --cacert ca.crt --cert client.crt --key client.key`); this is in addition to the password, if one is set.
+`-addr ""` leaves only TLS. With `-tls-ca`, a client must also present a certificate signed by that CA (`redis-cli --tls --cacert ca.crt --cert client.crt --key client.key`); this is in addition to the password, if one is set. [Protected mode](#protected-mode) does not count certificates: to let clients from other hosts in with a certificate and no password, start the server with `-protected-mode=false`.
 
 The server reads the certificate and key again when either file changes, at the next connection, so a renewed certificate needs no restart. If the new pair does not load, for example while only one of the two files has been replaced, the server keeps the previous certificate and logs a warning. The CA file is read only at start.
+
+## Protected mode
+
+While a new connection is signed in as `default` without a password, CasketDB serves only clients on the loopback interface, like protected mode in Redis. A client from another host gets a `-DENIED` error that explains what to do, and the connection is closed. This holds for `-addr` and `-tls-addr` alike, wherever they listen, and the server logs a warning at start when a non-loopback listener is affected.
+
+Protected mode looks at the password when a client connects. Once `default` has a password, from `-requirepass` or from `CONFIG SET requirepass` run on the loopback interface, or is turned `off` with `ACL SETUSER`, clients from other hosts get in and must authenticate. `-protected-mode=false` turns the check off; use it only where every client that can reach the server is trusted.
 
 ## Examples
 

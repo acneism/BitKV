@@ -20,7 +20,7 @@ func TestListen(t *testing.T) {
 		"TLS address without a key":         {tlsAddr: "127.0.0.1:0", tlsCert: "server.crt"},
 		"certificate without a TLS address": {addr: "127.0.0.1:0", tlsCert: "server.crt", tlsKey: "server.key"},
 	} {
-		if lns, err := listen(cfg, logger); err == nil {
+		if lns, err := listen(cfg, logger, true); err == nil {
 			for _, ln := range lns {
 				ln.Close()
 			}
@@ -29,7 +29,7 @@ func TestListen(t *testing.T) {
 	}
 	ca := testcert.New(t, "casketdb test ca")
 	cert, key := ca.Issue(t, "server", []string{"localhost"}, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
-	lns, err := listen(config{tlsAddr: "127.0.0.1:0", tlsCert: cert, tlsKey: key}, logger)
+	lns, err := listen(config{tlsAddr: "127.0.0.1:0", tlsCert: cert, tlsKey: key}, logger, true)
 	if err != nil || len(lns) != 1 {
 		t.Fatalf("TLS only: %d listeners, %v", len(lns), err)
 	}

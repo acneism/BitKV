@@ -42,7 +42,7 @@ Outside MULTI, KEYS, SCAN and DBSIZE lock one shard at a time. The result is not
 ### Connection
 
 - Only RESP2. `HELLO 3` returns `-NOPROTO`; `HELLO 2` accepts `AUTH` and `SETNAME`.
-- `AUTH <password>` signs in as `default`, `AUTH <user> <password>` as any user. Until a client authenticates, every command except AUTH, HELLO and QUIT returns `NOAUTH`. When `default` has no password, a new connection is signed in as `default` right away.
+- `AUTH <password>` signs in as `default`, `AUTH <user> <password>` as any user. Until a client authenticates, every command except AUTH, HELLO and QUIT returns `NOAUTH`. When `default` has no password, a new connection is signed in as `default` right away; in [protected mode](configuration.md#protected-mode), on by default, a client from another host gets `DENIED` instead and is disconnected.
 - Only database 0. `SELECT 0` succeeds; any other index returns an error.
 
 ### Access control

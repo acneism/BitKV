@@ -562,6 +562,47 @@ func TestAuth(t *testing.T) {
 	open.expect(status("PONG"), "PING")
 }
 
+type remoteListener struct{ net.Listener }
+
+func (l remoteListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return remoteConn{c}, nil
+}
+
+type remoteConn struct{ net.Conn }
+
+func (remoteConn) RemoteAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 50000}
+}
+
+func TestProtectedMode(t *testing.T) {
+	srv, db, addr := startServerWith(t, t.TempDir(), Config{ProtectedMode: true})
+	defer stopServer(t, srv, db)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve(remoteListener{ln}) }()
+	remote := ln.Addr().String()
+
+	refused := dial(t, remote)
+	if got, _ := refused.read().(errReply); !strings.HasPrefix(string(got), "DENIED") {
+		t.Fatalf("a client from another host got %q, want DENIED", got)
+	}
+	if _, err := refused.r.ReadByte(); err == nil {
+		t.Fatal("protected mode left the connection open")
+	}
+
+	dial(t, addr).expect(status("OK"), "CONFIG", "SET", "requirepass", "pw")
+	c := dial(t, remote)
+	c.expect(errReply("NOAUTH"), "PING")
+	c.expect(status("OK"), "AUTH", "pw")
+	c.expect(status("PONG"), "PING")
+}
+
 func TestConfigSet(t *testing.T) {
 	srv, db, addr := startServer(t, t.TempDir())
 	defer stopServer(t, srv, db)

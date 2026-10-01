@@ -14,10 +14,10 @@ A CasketDB cluster is 3 or 5 nodes that hold the same data and agree on every wr
 Start every node with the same `-raft-peers` and empty directories. The initial configuration comes from `-raft-peers`, so no bootstrap step is needed.
 
 ```bash
-casketdb -addr 10.0.0.1:6379 -dir data -raft-id n1 -raft-peers n1=10.0.0.1:7000,n2=10.0.0.2:7000,n3=10.0.0.3:7000
+CASKETDB_REQUIREPASS=secret casketdb -addr 10.0.0.1:6379 -dir data -raft-id n1 -raft-peers n1=10.0.0.1:7000,n2=10.0.0.2:7000,n3=10.0.0.3:7000
 ```
 
-The address in `-raft-peers` is how the other nodes reach that node's Raft transport; the node listens on it too, unless `-raft-listen` gives another address, for example behind NAT or in a container. `-addr` is where clients connect.
+The address in `-raft-peers` is how the other nodes reach that node's Raft transport; the node listens on it too, unless `-raft-listen` gives another address, for example behind NAT or in a container. `-addr` is where clients connect. Clients come from other hosts, so give every node the same password: without one, [protected mode](configuration.md#protected-mode) refuses them. The `redis-cli` examples below read it from `REDISCLI_AUTH`.
 
 A failed leader is replaced after an election timeout, 1 s by default. `-raft-election-timeout` changes it; heartbeats go ten times as often. A lower value speeds up failover on a fast network, a higher one avoids needless elections across slow links.
 
@@ -62,7 +62,7 @@ Changes go one at a time and run on the leader. A second change while one is in 
 1. Start the new node with an empty data directory, `-raft-join`, and `-raft-peers` listing itself and **every current member**, as `RAFT MEMBERS` shows them. A node that does not list the current leader rejects its messages and never catches up.
 
    ```bash
-   casketdb -addr 10.0.0.4:6379 -dir data -raft-id n4 -raft-join \
+   CASKETDB_REQUIREPASS=secret casketdb -addr 10.0.0.4:6379 -dir data -raft-id n4 -raft-join \
      -raft-peers n4=10.0.0.4:7000,n1=10.0.0.1:7000,n2=10.0.0.2:7000,n3=10.0.0.3:7000
    ```
 

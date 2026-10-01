@@ -23,12 +23,16 @@ const (
 var ErrServerClosed = errors.New("server: closed")
 
 type Config struct {
-	MaxBulkLen   int
-	RequirePass  string
-	Logger       *slog.Logger
-	Replica      *replica.Node
-	TrackLatency bool
+	MaxBulkLen    int
+	RequirePass   string
+	Logger        *slog.Logger
+	Replica       *replica.Node
+	TrackLatency  bool
+	ProtectedMode bool
 }
+
+const denied = "DENIED CasketDB is running in protected mode because the default user has no password, so it accepts clients on the loopback interface only. " +
+	"Connect from the loopback interface and set a password with CONFIG SET requirepass, or restart the server with -protected-mode=false if every client that can reach it is trusted."
 
 type Server struct {
 	db      *bitcask.DB
@@ -178,6 +182,15 @@ func (s *Server) autoUser() *user {
 	return nil
 }
 
+func (s *Server) AuthRequired() bool {
+	return s.autoUser() == nil
+}
+
+func IsLoopback(addr net.Addr) bool {
+	tcp, ok := addr.(*net.TCPAddr)
+	return ok && tcp.IP.IsLoopback()
+}
+
 func (s *Server) serveClient(c *client) {
 	defer s.wg.Done()
 	defer func() {
@@ -186,6 +199,11 @@ func (s *Server) serveClient(c *client) {
 		s.mu.Unlock()
 		c.conn.Close()
 	}()
+	if s.cfg.ProtectedMode && c.user != nil && !IsLoopback(c.conn.RemoteAddr()) {
+		c.w.Error(denied)
+		c.w.Flush()
+		return
+	}
 	var batch []queued
 	for !c.quit {
 		args, err := c.r.ReadCommand()
