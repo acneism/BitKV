@@ -17,6 +17,12 @@ var latencyBounds = [...]time.Duration{
 	time.Second, 2500 * time.Millisecond,
 }
 
+var epoch = time.Now()
+
+func elapsed() time.Duration {
+	return time.Since(epoch)
+}
+
 type histogram struct {
 	counts [len(latencyBounds) + 1]atomic.Uint64
 	sum    atomic.Int64

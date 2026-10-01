@@ -235,12 +235,12 @@ func (s *Server) runBatch(c *client, batch []queued) {
 		keys = q.cmd.keys.extract(q.args, keys)
 	}
 	var replies arrayReply
-	start := time.Now()
+	start := elapsed()
 	err := s.update(bitcask.Keys(keys...), func(tx *bitcask.Tx) (err error) {
 		replies, err = runQueue(tx, batch)
 		return err
 	})
-	s.latency.observe(time.Since(start), len(batch))
+	s.latency.observe(elapsed()-start, len(batch))
 	s.processed.Add(int64(len(batch)))
 	for i := range batch {
 		if err != nil {
@@ -283,9 +283,9 @@ func (s *Server) execute(c *client, args [][]byte) {
 		return
 	}
 	s.processed.Add(1)
-	start := time.Now()
+	start := elapsed()
 	r := s.run(c, cmd, args)
-	s.latency.observe(time.Since(start), 1)
+	s.latency.observe(elapsed()-start, 1)
 	r.writeTo(c.w)
 }
 
