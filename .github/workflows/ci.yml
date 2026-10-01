@@ -42,8 +42,10 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
-      - if: matrix.os != 'ubuntu-latest'
+      - if: matrix.os == 'macos-latest'
         run: go test -timeout 15m ./...
+      - if: matrix.os == 'windows-latest'
+        run: go test -p 1 -timeout 20m ./...
       - if: matrix.os == 'ubuntu-latest'
         name: go test with coverage
         run: |
