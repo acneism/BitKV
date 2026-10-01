@@ -1,6 +1,6 @@
 # Configuration
 
-CasketDB is configured with command-line flags. There is no configuration file and no `CONFIG SET`.
+CasketDB is configured with command-line flags or the matching [environment variables](#environment). A few settings can be changed at runtime with `CONFIG SET`. There is no configuration file.
 
 ## Flags
 
@@ -16,6 +16,9 @@ CasketDB is configured with command-line flags. There is no configuration file a
 | `-merge-min-bytes` | 64 MB | Minimum database size for an automatic merge, split evenly between logs |
 | `-merge-interval` | `1m` | How often to check whether a log needs a merge; `0` turns automatic merge off |
 | `-proto-max-bulk-len` | 512 MB | Largest bulk string a client may send |
+| `-metrics-addr` | empty | Address of the Prometheus endpoint `/metrics`, for example `127.0.0.1:9121`; empty turns it off. See [monitoring](monitoring.md) |
+| `-log-level` | `info` | `debug`, `info`, `warn` or `error` |
+| `-log-format` | `text` | `text` (key=value) or `json`, one record per line on standard error |
 | `-raft-id` | empty | Node id in the cluster. Setting it turns replication on |
 | `-raft-peers` | empty | All cluster nodes including this one: `id=host:port,…`, the same on every node. Used only when the cluster is created and when a node joins; later the membership comes from the Raft log |
 | `-raft-tls-cert` | empty | PEM certificate of this node for mutual TLS between nodes; its first DNS name must be the node id. Set together with `-raft-tls-key` and `-raft-tls-ca`, see [mutual TLS](replication.md#mutual-tls-between-nodes) |

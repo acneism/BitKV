@@ -32,6 +32,7 @@ type Stats struct {
 	Merges      int64
 	Writes      int64
 	Fsyncs      int64
+	FsyncTime   time.Duration
 	ExpiredKeys int64
 }
 
@@ -51,6 +52,7 @@ type DB struct {
 	merges      atomic.Int64
 	writes      atomic.Int64
 	fsyncs      atomic.Int64
+	fsyncTime   atomic.Int64
 	expiredKeys atomic.Int64
 	applied     atomic.Uint64
 	syncPolicy  atomic.Int32
@@ -224,6 +226,7 @@ func (db *DB) Stats() Stats {
 		Merges:      db.merges.Load(),
 		Writes:      db.writes.Load(),
 		Fsyncs:      db.fsyncs.Load(),
+		FsyncTime:   time.Duration(db.fsyncTime.Load()),
 		ExpiredKeys: db.expiredKeys.Load(),
 	}
 	for _, g := range db.groups {

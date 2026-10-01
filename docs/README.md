@@ -8,6 +8,7 @@ Start with the [project README](../README.md) for a quick start.
 - [Configuration](configuration.md) — flags, environment, INFO fields
 - [Persistence and recovery](persistence.md) — fsync policies, crash recovery, merge, backups
 - [Replication](replication.md) — running a Raft cluster, guarantees, failover
+- [Monitoring](monitoring.md) — Prometheus metrics, useful queries, logs
 - [Limitations and roadmap](limitations.md) — what CasketDB does not do yet
 
 ## Inside CasketDB

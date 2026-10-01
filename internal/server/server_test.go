@@ -585,6 +585,32 @@ func TestConfigSet(t *testing.T) {
 	fresh.expect(errReply("ERR Protocol error: invalid bulk length"), "SET", "long", "0123456789")
 }
 
+func TestMetrics(t *testing.T) {
+	srv, db, addr := startServer(t, t.TempDir())
+	defer stopServer(t, srv, db)
+	c := dial(t, addr)
+	c.expect(status("OK"), "SET", "k", "v")
+	c.expect("v", "GET", "k")
+	var b strings.Builder
+	srv.WriteMetrics(&b)
+	out := b.String()
+	for _, line := range []string{
+		`casketdb_build_info{version="` + Version + `"} 1`,
+		"casketdb_connected_clients 1",
+		"casketdb_commands_processed_total 2",
+		`casketdb_command_duration_seconds_bucket{le="+Inf"} 2`,
+		"casketdb_command_duration_seconds_count 2",
+		"casketdb_keys 1",
+	} {
+		if !strings.Contains(out, line+"\n") {
+			t.Fatalf("metrics lack %q:\n%s", line, out)
+		}
+	}
+	if strings.Contains(out, "casketdb_raft_") {
+		t.Fatalf("raft metrics on a single node:\n%s", out)
+	}
+}
+
 func TestMatchGlob(t *testing.T) {
 	tests := []struct {
 		pattern, s string

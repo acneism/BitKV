@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -38,6 +39,9 @@ type config struct {
 	raftCA      string
 	raftListen  string
 	raftTimeout time.Duration
+	metricsAddr string
+	logLevel    string
+	logFormat   string
 	opts        bitcask.Options
 }
 
@@ -65,9 +69,15 @@ func main() {
 	flag.StringVar(&cfg.raftCert, "raft-tls-cert", "", "PEM certificate of this node for mutual TLS between nodes; its DNS name must be the node id")
 	flag.StringVar(&cfg.raftKey, "raft-tls-key", "", "PEM private key for -raft-tls-cert")
 	flag.StringVar(&cfg.raftCA, "raft-tls-ca", "", "PEM certificates of the CA that signs node certificates")
+	flag.StringVar(&cfg.metricsAddr, "metrics-addr", "", "address of the Prometheus /metrics endpoint, for example 127.0.0.1:9121; empty turns it off")
+	flag.StringVar(&cfg.logLevel, "log-level", "info", "log level: debug, info, warn or error")
+	flag.StringVar(&cfg.logFormat, "log-format", "text", "log format: text or json")
 	flag.Parse()
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	shadowed, err := applyEnv(flag.CommandLine, os.LookupEnv)
+	logger, lerr := newLogger(cfg.logLevel, cfg.logFormat)
+	if err == nil {
+		err = lerr
+	}
 	for _, name := range shadowed {
 		logger.Warn("environment variable ignored, the command-line flag wins", "variable", name)
 	}
@@ -101,7 +111,7 @@ func run(logger *slog.Logger, cfg config) error {
 
 	var rep *replica.Node
 	if cfg.raftID != "" {
-		if rep, err = openReplica(cfg, db); err != nil {
+		if rep, err = openReplica(cfg, db, logger); err != nil {
 			return errors.Join(err, db.Close())
 		}
 		logger.Info("raft started", "id", cfg.raftID, "peers", cfg.raftPeers)
@@ -122,6 +132,22 @@ func run(logger *slog.Logger, cfg config) error {
 		logger.Warn("listening on a non-loopback address without a password; set -requirepass", "addr", ln.Addr().String())
 	}
 	srv := server.New(db, server.Config{MaxBulkLen: cfg.maxBulk, RequirePass: cfg.requirePass, Logger: logger, Replica: rep})
+	var metrics *http.Server
+	if cfg.metricsAddr != "" {
+		mln, err := net.Listen("tcp", cfg.metricsAddr)
+		if err != nil {
+			ln.Close()
+			return errors.Join(err, closeStore(rep, db))
+		}
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+			srv.WriteMetrics(w)
+		})
+		metrics = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		go func() { _ = metrics.Serve(mln) }()
+		logger.Info("metrics endpoint ready", "url", "http://"+mln.Addr().String()+"/metrics")
+	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
 	logger.Info("ready to accept connections", "addr", ln.Addr().String(), "appendfsync", policy.String(),
@@ -136,6 +162,9 @@ func run(logger *slog.Logger, cfg config) error {
 		if errors.Is(err, server.ErrServerClosed) {
 			err = nil
 		}
+	}
+	if metrics != nil {
+		metrics.Close()
 	}
 	srv.Close()
 	if cerr := closeStore(rep, db); cerr != nil && err == nil {
@@ -193,7 +222,23 @@ func warnIfShared(logger *slog.Logger, dir string) {
 	}
 }
 
-func openReplica(cfg config, db *bitcask.DB) (*replica.Node, error) {
+func newLogger(level, format string) (*slog.Logger, error) {
+	var lv slog.Level
+	err := lv.UnmarshalText([]byte(level))
+	if err != nil {
+		err = fmt.Errorf("-log-level: %w", err)
+	}
+	opts := &slog.HandlerOptions{Level: lv}
+	if format == "json" {
+		return slog.New(slog.NewJSONHandler(os.Stderr, opts)), err
+	}
+	if format != "text" && err == nil {
+		err = fmt.Errorf("-log-format %q: want text or json", format)
+	}
+	return slog.New(slog.NewTextHandler(os.Stderr, opts)), err
+}
+
+func openReplica(cfg config, db *bitcask.DB, logger *slog.Logger) (*replica.Node, error) {
 	peers, err := replica.ParsePeers(cfg.raftPeers)
 	if err != nil {
 		return nil, err
@@ -216,7 +261,7 @@ func openReplica(cfg config, db *bitcask.DB) (*replica.Node, error) {
 		Peers:           peers,
 		Listen:          cfg.raftListen,
 		Dir:             cfg.raftDir,
-		LogOutput:       os.Stderr,
+		Logger:          logger,
 		UnsafeNoFsync:   cfg.raftNoFsync,
 		TLS:             tlsConfig,
 		Reads:           reads,

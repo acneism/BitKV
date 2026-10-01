@@ -48,6 +48,7 @@ type Server struct {
 
 	pass    atomic.Pointer[string]
 	maxBulk atomic.Int64
+	latency histogram
 }
 
 type client struct {
@@ -234,10 +235,12 @@ func (s *Server) runBatch(c *client, batch []queued) {
 		keys = q.cmd.keys.extract(q.args, keys)
 	}
 	var replies arrayReply
+	start := time.Now()
 	err := s.update(bitcask.Keys(keys...), func(tx *bitcask.Tx) (err error) {
 		replies, err = runQueue(tx, batch)
 		return err
 	})
+	s.latency.observe(time.Since(start), len(batch))
 	s.processed.Add(int64(len(batch)))
 	for i := range batch {
 		if err != nil {
@@ -280,7 +283,10 @@ func (s *Server) execute(c *client, args [][]byte) {
 		return
 	}
 	s.processed.Add(1)
-	s.run(c, cmd, args).writeTo(c.w)
+	start := time.Now()
+	r := s.run(c, cmd, args)
+	s.latency.observe(time.Since(start), 1)
+	r.writeTo(c.w)
 }
 
 func (c *client) reject(r errorReply) {

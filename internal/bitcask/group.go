@@ -108,10 +108,9 @@ func (g *logGroup) carryMarkLocked() error {
 	if err := g.waitWritten(seq); err != nil {
 		return err
 	}
-	if err := g.active.f.Sync(); err != nil {
+	if err := g.db.fsync(g.active.f); err != nil {
 		return g.db.fail(err)
 	}
-	g.db.fsyncs.Add(1)
 	return nil
 }
 
@@ -140,10 +139,9 @@ func (g *logGroup) rotateLocked(id uint32) error {
 	if err := g.waitWritten(g.seq); err != nil {
 		return err
 	}
-	if err := g.active.f.Sync(); err != nil {
+	if err := g.db.fsync(g.active.f); err != nil {
 		return g.db.fail(err)
 	}
-	g.db.fsyncs.Add(1)
 	prev := g.active
 	if err := g.newActive(id); err != nil {
 		return err
@@ -341,9 +339,8 @@ func (g *logGroup) syncOnce() (uint64, error) {
 	if closed {
 		return target, nil
 	}
-	err := df.f.Sync()
+	err := g.db.fsync(df.f)
 	if err == nil {
-		g.db.fsyncs.Add(1)
 		return target, nil
 	}
 	g.filesMu.RLock()

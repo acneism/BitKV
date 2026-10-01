@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -56,7 +55,7 @@ type Config struct {
 	Peers           map[string]string
 	Listen          string
 	Dir             string
-	LogOutput       io.Writer
+	Logger          *slog.Logger
 	UnsafeNoFsync   bool
 	TLS             *tls.Config
 	Reads           ReadMode
@@ -68,7 +67,9 @@ type Config struct {
 type Status struct {
 	State      string
 	Term       uint64
+	Commit     uint64
 	Applied    uint64
+	LastIndex  uint64
 	LeaderID   string
 	LeaderAddr string
 	Membership string
@@ -136,9 +137,9 @@ func open(db *bitcask.DB, cfg Config, tune func(*node.Config)) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := cfg.LogOutput
-	if out == nil {
-		out = io.Discard
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
 	}
 	peers := make(map[raft.NodeID]string, len(cfg.Peers))
 	for id, addr := range cfg.Peers {
@@ -162,7 +163,7 @@ func open(db *bitcask.DB, cfg Config, tune func(*node.Config)) (*Node, error) {
 		NoSync:          cfg.UnsafeNoFsync,
 		CompactEntries:  1 << 16,
 		TrailingEntries: 1 << 16,
-		Logger:          slog.New(slog.NewTextHandler(out, &slog.HandlerOptions{Level: slog.LevelWarn})).With("component", "raft"),
+		Logger:          logger.With("component", "raft"),
 	}
 	if tune != nil {
 		tune(&nc)
@@ -300,7 +301,9 @@ func (n *Node) Status() Status {
 	return Status{
 		State:      st.State.String(),
 		Term:       st.Term,
+		Commit:     st.Commit,
 		Applied:    st.Applied,
+		LastIndex:  st.LastIndex,
 		LeaderID:   string(st.Lead),
 		LeaderAddr: cs.Addrs[st.Lead],
 		Membership: membership,

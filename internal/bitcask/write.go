@@ -1,5 +1,10 @@
 package bitcask
 
+import (
+	"os"
+	"time"
+)
+
 const maxScratch = 8 << 20
 
 type overlayEntry struct {
@@ -64,6 +69,16 @@ func (db *DB) stateErr() error {
 		return ErrClosed
 	}
 	return db.failure()
+}
+
+func (db *DB) fsync(f *os.File) error {
+	start := time.Now()
+	err := f.Sync()
+	db.fsyncTime.Add(int64(time.Since(start)))
+	if err == nil {
+		db.fsyncs.Add(1)
+	}
+	return err
 }
 
 func (db *DB) Sync() error {

@@ -310,6 +310,9 @@ func testConcurrentWrites(t *testing.T, unsafe bool) {
 		t.Fatal(err)
 	}
 	eventually(t, "replicas to converge", converged(nodes, "counter", "400", 401))
+	if st := l.node.Status(); st.Applied == 0 || st.Commit < st.Applied || st.LastIndex < st.Commit {
+		t.Fatalf("leader indexes: commit %d, applied %d, last %d", st.Commit, st.Applied, st.LastIndex)
+	}
 	for _, tn := range nodes {
 		if st := tn.node.Status(); st.LeaderID != l.id || st.LeaderAddr != l.peers[l.id] {
 			t.Fatalf("%s reports leader %s at %q, want %s at %q", tn.id, st.LeaderID, st.LeaderAddr, l.id, l.peers[l.id])

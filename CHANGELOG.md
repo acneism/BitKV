@@ -8,6 +8,8 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 
 - Every flag can be set through an environment variable, `CASKETDB_` plus the flag name in upper case with underscores: `CASKETDB_RAFT_PEERS`, `CASKETDB_APPENDFSYNC`. The command line wins, with a warning naming the ignored variable. Before, only `CASKETDB_REQUIREPASS` existed.
 - `CONFIG SET` changes `requirepass`, `appendfsync` and `proto-max-bulk-len` at runtime, on one node and until restart, as in Redis. `CONFIG GET` also answers `requirepass`.
+- Prometheus metrics at `-metrics-addr`: clients, commands and a command latency histogram, keys, data files, fsync count and time, and on cluster nodes the Raft term, indexes, leadership and membership. See [monitoring](docs/monitoring.md).
+- `-log-level` and `-log-format json`. Raft library messages now follow the server's level, so its info messages appear by default.
 
 ### Fixed
 
