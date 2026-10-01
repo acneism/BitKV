@@ -1,0 +1,62 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: Commit, tag or branch to compare against
+        default: main
+      bench:
+        description: Benchmark name regexp
+        default: .
+      rounds:
+        description: Interleaved rounds of each version
+        default: "10"
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      BASE: ${{ inputs.base }}
+      BENCH: ${{ inputs.bench }}
+      ROUNDS: ${{ inputs.rounds }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build both versions
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "$BASE"
+          for pkg in bitcask replica server; do
+            go test -c -o "$RUNNER_TEMP/$pkg-head.test" "./internal/$pkg"
+            (cd "$RUNNER_TEMP/base" && go test -c -o "$RUNNER_TEMP/$pkg-base.test" "./internal/$pkg")
+          done
+      - name: Run interleaved
+        run: |
+          for r in $(seq "$ROUNDS"); do
+            order="base head"
+            if [ $((r % 2)) = 0 ]; then order="head base"; fi
+            for v in $order; do
+              for pkg in bitcask replica server; do
+                (cd "$RUNNER_TEMP" && "./$pkg-$v.test" -test.run '^$' -test.bench "$BENCH" -test.benchmem) >> "$v.txt"
+              done
+            done
+          done
+      - name: Compare
+        run: |
+          go run golang.org/x/perf/cmd/benchstat@latest base.txt head.txt | tee benchstat.txt
+          { echo "Base \`$BASE\`, head \`$GITHUB_REF_NAME\`, $ROUNDS interleaved rounds."; echo '```'; cat benchstat.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: benchmarks
+          path: |
+            base.txt
+            head.txt
+            benchstat.txt

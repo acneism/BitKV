@@ -38,6 +38,17 @@ On Windows the `ReadFile` system call took about 70% of a GET, so the gain is la
 
 v0.9 cut allocations per command, test client included: SET 10 → 6, GET 12 → 7, INCR 9 → 6. Time per operation stayed within noise; the gain is less garbage-collection work.
 
+## Comparing two builds in CI
+
+The [Benchmarks workflow](../.github/workflows/bench.yml) compares a branch with a base on one GitHub runner. It builds the benchmarks of both, runs them in interleaved rounds, ten by default, and puts the `benchstat` table in the run's summary; the raw results are an artifact.
+
+```bash
+gh workflow run bench.yml --ref my-branch -f base=main
+gh workflow run bench.yml --ref my-branch -f base=v0.11.1 -f bench=BenchmarkServer -f rounds=20
+```
+
+A full run takes about an hour. Shared runners are noisy, so trust only the changes `benchstat` marks as significant, and confirm a surprising one on your own machine. There is no history across runs: different runners make the numbers incomparable.
+
 ## Methodology notes
 
 - Fsync time on this machine is bimodal on Windows and varies by 10–30% between runs. Compare two builds with interleaved runs, never runs taken hours apart.
