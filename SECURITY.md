@@ -12,7 +12,7 @@ Include the version or commit, the flags the server ran with, steps to reproduce
 
 ## Security model
 
-Deploy CasketDB with these properties in mind:
+Deploy CasketDB with these properties in mind. The [threat model](docs/threat-model.md) lists the attackers they stop and what stays out of scope.
 
 - **TLS for clients.** `-tls-addr` serves clients over TLS 1.2 or 1.3; with `-tls-ca`, every client must also present a certificate signed by that CA. Connections to `-addr` are plain text, password included, so on an untrusted network turn it off with `-addr ""` or keep it on loopback. See [TLS for clients](docs/configuration.md#tls-for-clients).
 - **Users and permissions.** `-requirepass` sets the password of the `default` user, which may run every command. `ACL SETUSER` creates users limited to command categories, commands and key patterns, with passwords stored as SHA-256 hashes; see [access control](docs/commands.md#access-control). Users are stored in the data directory, in the file `SYSTEM`, and replicated to every node of a cluster. Whoever may run `CONFIG` can change the `default` password and the sync policy; paths, addresses and TLS files cannot be changed at runtime.

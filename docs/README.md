@@ -10,6 +10,7 @@ Start with the [project README](../README.md) for a quick start.
 - [Replication](replication.md) — running a Raft cluster, guarantees, failover
 - [Monitoring](monitoring.md) — Prometheus metrics, useful queries, logs
 - [Limitations and roadmap](limitations.md) — what CasketDB does not do yet
+- [Threat model](threat-model.md) — what CasketDB protects, from whom, and what is left to the deployment
 
 ## Inside CasketDB
 
