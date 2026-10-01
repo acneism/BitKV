@@ -7,6 +7,10 @@ import (
 	"github.com/acneism/casketdb/internal/replica"
 )
 
+var raftCommands = map[string]command{
+	"raft": {arity: -2, kind: kindConn, conn: cmdRaft},
+}
+
 func cmdRaft(s *Server, c *client, args [][]byte) reply {
 	rep := s.cfg.Replica
 	if rep == nil {

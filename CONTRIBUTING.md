@@ -97,6 +97,7 @@ Fsync time varies a lot between runs. When you compare two builds, alternate the
 - Match the surrounding code: naming, error handling, test helpers.
 - Code outside `internal/replica` uses only the standard library; the fault-injection tests also use Porcupine. Discuss a new dependency in an issue first.
 - Everything that knows about Raft stays in `internal/replica`.
+- A command is a handler plus one entry in the table at the top of its file: `keys.go`, `strings.go`, `multi.go`, `raft.go`, or `commands.go` for connection and server commands.
 
 ### Linters
 

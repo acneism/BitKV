@@ -2,6 +2,14 @@ package server
 
 import "github.com/acneism/casketdb/internal/bitcask"
 
+var transactionCommands = map[string]command{
+	"multi":   {arity: 1, kind: kindConn, conn: cmdMulti, inMulti: true},
+	"exec":    {arity: 1, kind: kindConn, conn: cmdExec, inMulti: true},
+	"discard": {arity: 1, kind: kindConn, conn: cmdDiscard, inMulti: true},
+	"watch":   {arity: -2, kind: kindConn, conn: cmdWatch, inMulti: true},
+	"unwatch": {arity: 1, kind: kindConn, conn: cmdUnwatch, inMulti: true},
+}
+
 type queued struct {
 	cmd  command
 	args [][]byte

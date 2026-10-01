@@ -92,56 +92,27 @@ func lookup(name []byte) (command, bool) {
 var commands map[string]command
 
 func init() {
-	commands = map[string]command{
-		"ping":         {arity: -1, kind: kindPure, tx: cmdPing},
-		"echo":         {arity: 2, kind: kindPure, tx: cmdEcho},
-		"quit":         {arity: -1, kind: kindConn, conn: cmdQuit, inMulti: true, noAuth: true},
-		"auth":         {arity: -2, kind: kindConn, conn: cmdAuth, noAuth: true},
-		"hello":        {arity: -1, kind: kindConn, conn: cmdHello, noAuth: true},
-		"select":       {arity: 2, kind: kindConn, conn: cmdSelect},
-		"client":       {arity: -2, kind: kindConn, conn: cmdClient},
-		"command":      {arity: -1, kind: kindConn, conn: cmdCommand},
-		"config":       {arity: -2, kind: kindConn, conn: cmdConfig},
-		"info":         {arity: -1, kind: kindConn, conn: cmdInfo},
-		"raft":         {arity: -2, kind: kindConn, conn: cmdRaft},
-		"flushdb":      {arity: -1, kind: kindConn, conn: cmdFlush},
-		"flushall":     {arity: -1, kind: kindConn, conn: cmdFlush},
-		"save":         {arity: 1, kind: kindConn, conn: cmdSave},
-		"bgrewriteaof": {arity: 1, kind: kindConn, conn: cmdBgRewriteAOF},
-		"multi":        {arity: 1, kind: kindConn, conn: cmdMulti, inMulti: true},
-		"exec":         {arity: 1, kind: kindConn, conn: cmdExec, inMulti: true},
-		"discard":      {arity: 1, kind: kindConn, conn: cmdDiscard, inMulti: true},
-		"watch":        {arity: -2, kind: kindConn, conn: cmdWatch, inMulti: true},
-		"unwatch":      {arity: 1, kind: kindConn, conn: cmdUnwatch, inMulti: true},
-		"get":          {arity: 2, kind: kindRead, keys: oneKey, tx: cmdGet},
-		"set":          {arity: -3, kind: kindWrite, keys: oneKey, tx: cmdSet},
-		"setnx":        {arity: 3, kind: kindWrite, keys: oneKey, tx: cmdSetNX},
-		"setex":        {arity: 4, kind: kindWrite, keys: oneKey, tx: cmdSetEX},
-		"psetex":       {arity: 4, kind: kindWrite, keys: oneKey, tx: cmdPSetEX},
-		"getdel":       {arity: 2, kind: kindWrite, keys: oneKey, tx: cmdGetDel},
-		"mget":         {arity: -2, kind: kindRead, keys: allArgs, tx: cmdMGet},
-		"mset":         {arity: -3, kind: kindWrite, keys: pairs, tx: cmdMSet},
-		"append":       {arity: 3, kind: kindWrite, keys: oneKey, tx: cmdAppend},
-		"strlen":       {arity: 2, kind: kindRead, keys: oneKey, tx: cmdStrlen},
-		"incr":         {arity: 2, kind: kindWrite, keys: oneKey, tx: cmdIncr},
-		"decr":         {arity: 2, kind: kindWrite, keys: oneKey, tx: cmdDecr},
-		"incrby":       {arity: 3, kind: kindWrite, keys: oneKey, tx: cmdIncrBy},
-		"decrby":       {arity: 3, kind: kindWrite, keys: oneKey, tx: cmdDecrBy},
-		"del":          {arity: -2, kind: kindWrite, keys: allArgs, tx: cmdDel},
-		"unlink":       {arity: -2, kind: kindWrite, keys: allArgs, tx: cmdDel},
-		"exists":       {arity: -2, kind: kindRead, keys: allArgs, tx: cmdExists},
-		"type":         {arity: 2, kind: kindRead, keys: oneKey, tx: cmdType},
-		"keys":         {arity: 2, kind: kindRead, global: true, tx: cmdKeys},
-		"scan":         {arity: -2, kind: kindRead, global: true, tx: cmdScan},
-		"dbsize":       {arity: 1, kind: kindRead, global: true, tx: cmdDBSize},
-		"expire":       {arity: -3, kind: kindWrite, keys: oneKey, tx: cmdExpire},
-		"pexpire":      {arity: -3, kind: kindWrite, keys: oneKey, tx: cmdPExpire},
-		"expireat":     {arity: -3, kind: kindWrite, keys: oneKey, tx: cmdExpireAt},
-		"pexpireat":    {arity: -3, kind: kindWrite, keys: oneKey, tx: cmdPExpireAt},
-		"ttl":          {arity: 2, kind: kindRead, keys: oneKey, tx: cmdTTL},
-		"pttl":         {arity: 2, kind: kindRead, keys: oneKey, tx: cmdPTTL},
-		"persist":      {arity: 2, kind: kindWrite, keys: oneKey, tx: cmdPersist},
+	commands = map[string]command{}
+	for _, table := range []map[string]command{serverCommands, keyCommands, stringCommands, transactionCommands, raftCommands} {
+		maps.Copy(commands, table)
 	}
+}
+
+var serverCommands = map[string]command{
+	"ping":         {arity: -1, kind: kindPure, tx: cmdPing},
+	"echo":         {arity: 2, kind: kindPure, tx: cmdEcho},
+	"quit":         {arity: -1, kind: kindConn, conn: cmdQuit, inMulti: true, noAuth: true},
+	"auth":         {arity: -2, kind: kindConn, conn: cmdAuth, noAuth: true},
+	"hello":        {arity: -1, kind: kindConn, conn: cmdHello, noAuth: true},
+	"select":       {arity: 2, kind: kindConn, conn: cmdSelect},
+	"client":       {arity: -2, kind: kindConn, conn: cmdClient},
+	"command":      {arity: -1, kind: kindConn, conn: cmdCommand},
+	"config":       {arity: -2, kind: kindConn, conn: cmdConfig},
+	"info":         {arity: -1, kind: kindConn, conn: cmdInfo},
+	"flushdb":      {arity: -1, kind: kindConn, conn: cmdFlush},
+	"flushall":     {arity: -1, kind: kindConn, conn: cmdFlush},
+	"save":         {arity: 1, kind: kindConn, conn: cmdSave},
+	"bgrewriteaof": {arity: 1, kind: kindConn, conn: cmdBgRewriteAOF},
 }
 
 func upper(b []byte) string {

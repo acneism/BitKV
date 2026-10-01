@@ -8,6 +8,23 @@ import (
 	"github.com/acneism/casketdb/internal/bitcask"
 )
 
+var keyCommands = map[string]command{
+	"del":       {arity: -2, kind: kindWrite, keys: allArgs, tx: cmdDel},
+	"unlink":    {arity: -2, kind: kindWrite, keys: allArgs, tx: cmdDel},
+	"exists":    {arity: -2, kind: kindRead, keys: allArgs, tx: cmdExists},
+	"type":      {arity: 2, kind: kindRead, keys: oneKey, tx: cmdType},
+	"keys":      {arity: 2, kind: kindRead, global: true, tx: cmdKeys},
+	"scan":      {arity: -2, kind: kindRead, global: true, tx: cmdScan},
+	"dbsize":    {arity: 1, kind: kindRead, global: true, tx: cmdDBSize},
+	"expire":    {arity: -3, kind: kindWrite, keys: oneKey, tx: cmdExpire},
+	"pexpire":   {arity: -3, kind: kindWrite, keys: oneKey, tx: cmdPExpire},
+	"expireat":  {arity: -3, kind: kindWrite, keys: oneKey, tx: cmdExpireAt},
+	"pexpireat": {arity: -3, kind: kindWrite, keys: oneKey, tx: cmdPExpireAt},
+	"ttl":       {arity: 2, kind: kindRead, keys: oneKey, tx: cmdTTL},
+	"pttl":      {arity: 2, kind: kindRead, keys: oneKey, tx: cmdPTTL},
+	"persist":   {arity: 2, kind: kindWrite, keys: oneKey, tx: cmdPersist},
+}
+
 func cmdDel(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	var deleted intReply
 	for _, key := range args[1:] {
