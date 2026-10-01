@@ -11,6 +11,7 @@ CasketDB implements the string subset of Redis 7 over RESP2. Semantics, replies 
 | Expiry | EXPIRE, PEXPIRE, EXPIREAT, PEXPIREAT, TTL, PTTL, PERSIST | NX, XX, GT, LT. A time in the past deletes the key. TTL returns −2 for a missing key and −1 for a key without expiry |
 | Transactions | MULTI, EXEC, DISCARD, WATCH, UNWATCH | See [transactions](#transactions) |
 | Connection | PING, ECHO, QUIT, AUTH, SELECT, HELLO, CLIENT | CLIENT supports ID, GETNAME, SETNAME, SETINFO |
+| Access control | ACL SETUSER, ACL GETUSER, ACL DELUSER, ACL LIST, ACL USERS, ACL WHOAMI, ACL CAT | See [access control](#access-control) |
 | Server | INFO, FLUSHDB, FLUSHALL, SAVE, BGREWRITEAOF, COMMAND, CONFIG | See [server commands](#server-commands) |
 | Cluster | RAFT MEMBERS, RAFT ADDLEARNER, RAFT PROMOTE, RAFT REMOVE, RAFT TRANSFER | CasketDB's own commands, see [cluster administration](#cluster-administration) |
 
@@ -41,8 +42,22 @@ Outside MULTI, KEYS, SCAN and DBSIZE lock one shard at a time. The result is not
 ### Connection
 
 - Only RESP2. `HELLO 3` returns `-NOPROTO`; `HELLO 2` accepts `AUTH` and `SETNAME`.
-- One user. `AUTH <password>` and `AUTH default <password>` are accepted. Until a client authenticates, every command except AUTH, HELLO and QUIT returns `NOAUTH`.
+- `AUTH <password>` signs in as `default`, `AUTH <user> <password>` as any user. Until a client authenticates, every command except AUTH, HELLO and QUIT returns `NOAUTH`. When `default` has no password, a new connection is signed in as `default` right away.
 - Only database 0. `SELECT 0` succeeds; any other index returns an error.
+
+### Access control
+
+Users work as in Redis 6 and later. `default` always exists; `-requirepass` and `CONFIG SET requirepass` set its password. Passwords are stored as SHA-256 hashes.
+
+`ACL SETUSER` understands `on`, `off`, `>password`, `<password`, `#hash`, `!hash`, `nopass`, `resetpass`, `~pattern`, `allkeys`, `resetkeys`, `+command`, `-command`, `+@category`, `-@category`, `allcommands`, `nocommands` and `reset`. A new user starts `off`, without passwords, keys or commands. The categories are `keyspace`, `read`, `write`, `string`, `fast`, `slow`, `admin`, `dangerous`, `connection` and `transaction`, assigned as in Redis; `RAFT` is `@admin` and `@dangerous`. A denied command answers `NOPERM`, and inside MULTI it aborts EXEC.
+
+Differences from Redis:
+
+- Users live in memory on the node where they were created and are lost at restart. In a cluster, create them on every node.
+- Read-only and write-only key patterns (`%R~`, `%W~`), channels (`&`), selectors and rules for single subcommands (`+config|get`) are not supported.
+- `ACL LOG`, `ACL SAVE`, `ACL LOAD`, `ACL GENPASS` and `ACL DRYRUN` are missing.
+- `ACL WHOAMI` and `ACL CAT` are open to every authenticated user; the other ACL subcommands need the `acl` command.
+- Disabling a user with `off` stops new logins; open connections keep working. Deleting a user closes its connections at their next command.
 
 ### Server commands
 

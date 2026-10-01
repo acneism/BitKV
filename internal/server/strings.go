@@ -8,20 +8,20 @@ import (
 )
 
 var stringCommands = map[string]command{
-	"get":    {arity: 2, kind: kindRead, keys: oneKey, tx: cmdGet},
-	"set":    {arity: -3, kind: kindWrite, keys: oneKey, tx: cmdSet},
-	"setnx":  {arity: 3, kind: kindWrite, keys: oneKey, tx: cmdSetNX},
-	"setex":  {arity: 4, kind: kindWrite, keys: oneKey, tx: cmdSetEX},
-	"psetex": {arity: 4, kind: kindWrite, keys: oneKey, tx: cmdPSetEX},
-	"getdel": {arity: 2, kind: kindWrite, keys: oneKey, tx: cmdGetDel},
-	"mget":   {arity: -2, kind: kindRead, keys: allArgs, tx: cmdMGet},
-	"mset":   {arity: -3, kind: kindWrite, keys: pairs, tx: cmdMSet},
-	"append": {arity: 3, kind: kindWrite, keys: oneKey, tx: cmdAppend},
-	"strlen": {arity: 2, kind: kindRead, keys: oneKey, tx: cmdStrlen},
-	"incr":   {arity: 2, kind: kindWrite, keys: oneKey, tx: cmdIncr},
-	"decr":   {arity: 2, kind: kindWrite, keys: oneKey, tx: cmdDecr},
-	"incrby": {arity: 3, kind: kindWrite, keys: oneKey, tx: cmdIncrBy},
-	"decrby": {arity: 3, kind: kindWrite, keys: oneKey, tx: cmdDecrBy},
+	"get":    {arity: 2, kind: kindRead, keys: oneKey, acl: catString | catFast, tx: cmdGet},
+	"set":    {arity: -3, kind: kindWrite, keys: oneKey, acl: catString, tx: cmdSet},
+	"setnx":  {arity: 3, kind: kindWrite, keys: oneKey, acl: catString | catFast, tx: cmdSetNX},
+	"setex":  {arity: 4, kind: kindWrite, keys: oneKey, acl: catString, tx: cmdSetEX},
+	"psetex": {arity: 4, kind: kindWrite, keys: oneKey, acl: catString, tx: cmdPSetEX},
+	"getdel": {arity: 2, kind: kindWrite, keys: oneKey, acl: catString | catFast, tx: cmdGetDel},
+	"mget":   {arity: -2, kind: kindRead, keys: allArgs, acl: catString | catFast, tx: cmdMGet},
+	"mset":   {arity: -3, kind: kindWrite, keys: pairs, acl: catString, tx: cmdMSet},
+	"append": {arity: 3, kind: kindWrite, keys: oneKey, acl: catString | catFast, tx: cmdAppend},
+	"strlen": {arity: 2, kind: kindRead, keys: oneKey, acl: catString | catFast, tx: cmdStrlen},
+	"incr":   {arity: 2, kind: kindWrite, keys: oneKey, acl: catString | catFast, tx: cmdIncr},
+	"decr":   {arity: 2, kind: kindWrite, keys: oneKey, acl: catString | catFast, tx: cmdDecr},
+	"incrby": {arity: 3, kind: kindWrite, keys: oneKey, acl: catString | catFast, tx: cmdIncrBy},
+	"decrby": {arity: 3, kind: kindWrite, keys: oneKey, acl: catString | catFast, tx: cmdDecrBy},
 }
 
 func cmdGet(tx *bitcask.Tx, args [][]byte) (reply, error) {

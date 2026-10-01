@@ -60,10 +60,13 @@ func (k keySpec) extract(args [][]byte, dst []string) []string {
 }
 
 type command struct {
+	name    string
+	id      int
 	arity   int
 	kind    kind
 	keys    keySpec
 	global  bool
+	acl     category
 	tx      txFunc
 	conn    connFunc
 	inMulti bool
@@ -93,26 +96,31 @@ var commands map[string]command
 
 func init() {
 	commands = map[string]command{}
-	for _, table := range []map[string]command{serverCommands, keyCommands, stringCommands, transactionCommands, raftCommands} {
+	for _, table := range []map[string]command{serverCommands, keyCommands, stringCommands, transactionCommands, raftCommands, aclCommands} {
 		maps.Copy(commands, table)
+	}
+	for id, name := range slices.Sorted(maps.Keys(commands)) {
+		cmd := commands[name]
+		cmd.name, cmd.id = name, id
+		commands[name] = cmd
 	}
 }
 
 var serverCommands = map[string]command{
-	"ping":         {arity: -1, kind: kindPure, tx: cmdPing},
-	"echo":         {arity: 2, kind: kindPure, tx: cmdEcho},
-	"quit":         {arity: -1, kind: kindConn, conn: cmdQuit, inMulti: true, noAuth: true},
-	"auth":         {arity: -2, kind: kindConn, conn: cmdAuth, noAuth: true},
-	"hello":        {arity: -1, kind: kindConn, conn: cmdHello, noAuth: true},
-	"select":       {arity: 2, kind: kindConn, conn: cmdSelect},
-	"client":       {arity: -2, kind: kindConn, conn: cmdClient},
-	"command":      {arity: -1, kind: kindConn, conn: cmdCommand},
-	"config":       {arity: -2, kind: kindConn, conn: cmdConfig},
-	"info":         {arity: -1, kind: kindConn, conn: cmdInfo},
-	"flushdb":      {arity: -1, kind: kindConn, conn: cmdFlush},
-	"flushall":     {arity: -1, kind: kindConn, conn: cmdFlush},
-	"save":         {arity: 1, kind: kindConn, conn: cmdSave},
-	"bgrewriteaof": {arity: 1, kind: kindConn, conn: cmdBgRewriteAOF},
+	"ping":         {arity: -1, kind: kindPure, acl: catFast | catConnection, tx: cmdPing},
+	"echo":         {arity: 2, kind: kindPure, acl: catFast | catConnection, tx: cmdEcho},
+	"quit":         {arity: -1, kind: kindConn, acl: catFast | catConnection, conn: cmdQuit, inMulti: true, noAuth: true},
+	"auth":         {arity: -2, kind: kindConn, acl: catFast | catConnection, conn: cmdAuth, noAuth: true},
+	"hello":        {arity: -1, kind: kindConn, acl: catFast | catConnection, conn: cmdHello, noAuth: true},
+	"select":       {arity: 2, kind: kindConn, acl: catFast | catConnection, conn: cmdSelect},
+	"client":       {arity: -2, kind: kindConn, acl: catConnection, conn: cmdClient},
+	"command":      {arity: -1, kind: kindConn, acl: catConnection, conn: cmdCommand},
+	"config":       {arity: -2, kind: kindConn, acl: catAdmin | catDangerous, conn: cmdConfig},
+	"info":         {arity: -1, kind: kindConn, acl: catDangerous, conn: cmdInfo},
+	"flushdb":      {arity: -1, kind: kindConn, acl: catKeyspace | catWrite | catDangerous, conn: cmdFlush},
+	"flushall":     {arity: -1, kind: kindConn, acl: catKeyspace | catWrite | catDangerous, conn: cmdFlush},
+	"save":         {arity: 1, kind: kindConn, acl: catAdmin | catDangerous, conn: cmdSave},
+	"bgrewriteaof": {arity: 1, kind: kindConn, acl: catAdmin | catDangerous, conn: cmdBgRewriteAOF},
 }
 
 func upper(b []byte) string {
@@ -199,17 +207,18 @@ func cmdAuth(s *Server, c *client, args [][]byte) reply {
 	if len(args) > 3 {
 		return errorReply(errSyntax)
 	}
-	if len(args) == 2 && s.password() == "" {
+	if len(args) == 2 && s.users.get("default").perms.Load().nopass {
 		return errorReply("ERR AUTH <password> called without any password configured for the default user. Are you sure your configuration is correct?")
 	}
 	user := "default"
 	if len(args) == 3 {
 		user = string(args[1])
 	}
-	if !s.checkAuth(user, args[len(args)-1]) {
+	u := s.users.authenticate(user, args[len(args)-1])
+	if u == nil {
 		return errorReply(errWrongPass)
 	}
-	c.authed = true
+	c.user = u
 	return okReply
 }
 
@@ -223,17 +232,16 @@ func cmdHello(s *Server, c *client, args [][]byte) reply {
 			return errorReply("NOPROTO unsupported protocol version")
 		}
 	}
-	name, authed := c.name, c.authed
+	name, u := c.name, c.user
 	for i := 2; i < len(args); i++ {
 		switch upper(args[i]) {
 		case "AUTH":
 			if i+2 >= len(args) {
 				return errorReply(errSyntax)
 			}
-			if !s.checkAuth(string(args[i+1]), args[i+2]) {
+			if u = s.users.authenticate(string(args[i+1]), args[i+2]); u == nil {
 				return errorReply(errWrongPass)
 			}
-			authed = true
 			i += 2
 		case "SETNAME":
 			if i+1 >= len(args) {
@@ -248,10 +256,10 @@ func cmdHello(s *Server, c *client, args [][]byte) reply {
 			return errorReply(errSyntax)
 		}
 	}
-	if !authed {
+	if u == nil {
 		return errorReply("NOAUTH HELLO must be called with the client already authenticated, otherwise the HELLO <proto> AUTH <user> <pass> option can be used to authenticate the client and select the RESP protocol version at the same time")
 	}
-	c.name, c.authed = name, authed
+	c.name, c.user = name, u
 	return arrayReply{
 		bulkReply("server"), bulkReply("redis"),
 		bulkReply("version"), bulkReply(redisVersion),
@@ -356,7 +364,7 @@ func configSet(s *Server, c *client, args [][]byte) reply {
 		names = append(names, name)
 		switch name {
 		case "requirepass":
-			apply = append(apply, func() { s.pass.Store(&value) })
+			apply = append(apply, func() { s.pass.Store(&value); s.users.setPassword(value) })
 		case "appendfsync":
 			p, err := bitcask.ParseSyncPolicy(value)
 			if err != nil {

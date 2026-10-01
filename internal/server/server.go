@@ -1,7 +1,6 @@
 package server
 
 import (
-	"crypto/subtle"
 	"errors"
 	"io"
 	"log/slog"
@@ -48,6 +47,7 @@ type Server struct {
 	processed   atomic.Int64
 
 	pass    atomic.Pointer[string]
+	users   *users
 	maxBulk atomic.Int64
 	latency histogram
 }
@@ -58,7 +58,7 @@ type client struct {
 	r       *resp.Reader
 	w       *resp.Writer
 	name    string
-	authed  bool
+	user    *user
 	quit    bool
 	multi   bool
 	dirty   bool
@@ -83,6 +83,7 @@ func New(db *bitcask.DB, cfg Config) *Server {
 		clients:   make(map[*client]struct{}),
 	}
 	s.pass.Store(&cfg.RequirePass)
+	s.users = newUsers(cfg.RequirePass)
 	s.maxBulk.Store(int64(cfg.MaxBulkLen))
 	return s
 }
@@ -117,11 +118,11 @@ func (s *Server) Serve(ln net.Listener) error {
 		}
 		backoff = 0
 		c := &client{
-			id:     s.nextID.Add(1),
-			conn:   conn,
-			r:      resp.NewReader(conn, int(s.maxBulk.Load())),
-			w:      resp.NewWriter(conn),
-			authed: s.password() == "",
+			id:   s.nextID.Add(1),
+			conn: conn,
+			r:    resp.NewReader(conn, int(s.maxBulk.Load())),
+			w:    resp.NewWriter(conn),
+			user: s.autoUser(),
 		}
 		s.mu.Lock()
 		if s.closed {
@@ -163,12 +164,12 @@ func (s *Server) clientCount() int {
 	return len(s.clients)
 }
 
-func (s *Server) checkAuth(user string, pass []byte) bool {
-	if user != "default" {
-		return false
+func (s *Server) autoUser() *user {
+	u := s.users.get("default")
+	if p := u.perms.Load(); p.enabled && p.nopass {
+		return u
 	}
-	want := s.password()
-	return want == "" || subtle.ConstantTimeCompare(pass, []byte(want)) == 1
+	return nil
 }
 
 func (s *Server) serveClient(c *client) {
@@ -212,7 +213,7 @@ func (s *Server) serveClient(c *client) {
 }
 
 func (s *Server) batchable(c *client, args [][]byte) (command, bool) {
-	if len(args) == 0 || c.multi || !c.authed {
+	if len(args) == 0 || c.multi || c.user == nil || !c.user.perms.Load().all {
 		return command{}, false
 	}
 	cmd, ok := lookup(args[0])
@@ -270,9 +271,17 @@ func (s *Server) execute(c *client, args [][]byte) {
 	case !cmd.validArity(len(args)):
 		c.reject(errorReply("ERR wrong number of arguments for '" + strings.ToLower(string(args[0])) + "' command"))
 		return
-	case !c.authed && !cmd.noAuth:
+	case c.user == nil && !cmd.noAuth:
 		c.reject(errorReply("NOAUTH Authentication required."))
 		return
+	case c.user != nil && c.user.perms.Load().deleted:
+		c.quit = true
+		return
+	case c.user != nil && !cmd.noAuth:
+		if msg := permission(c, cmd, args); msg != "" {
+			c.reject(errorReply(msg))
+			return
+		}
 	}
 	if c.multi && !cmd.inMulti {
 		if cmd.kind == kindConn {

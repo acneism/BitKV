@@ -8,7 +8,7 @@ import (
 )
 
 var raftCommands = map[string]command{
-	"raft": {arity: -2, kind: kindConn, conn: cmdRaft},
+	"raft": {arity: -2, kind: kindConn, acl: catAdmin | catDangerous, conn: cmdRaft},
 }
 
 func cmdRaft(s *Server, c *client, args [][]byte) reply {
