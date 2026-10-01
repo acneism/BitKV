@@ -61,6 +61,7 @@ func (s *Server) WriteMetrics(w io.Writer) {
 	fmt.Fprintf(w, "# TYPE casketdb_build_info gauge\ncasketdb_build_info{version=%q} 1\n", Version)
 	metric("gauge", "casketdb_connected_clients", s.clientCount())
 	metric("counter", "casketdb_connections_received_total", s.connections.Load())
+	metric("counter", "casketdb_rejected_connections_total", s.rejected.Load())
 	metric("counter", "casketdb_commands_processed_total", s.processed.Load())
 	s.latency.write(w, "casketdb_command_duration_seconds")
 	st := s.db.Stats()

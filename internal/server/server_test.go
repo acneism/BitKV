@@ -603,6 +603,46 @@ func TestProtectedMode(t *testing.T) {
 	c.expect(status("PONG"), "PING")
 }
 
+func TestClientLimits(t *testing.T) {
+	srv, db, addr := startServerWith(t, t.TempDir(), Config{MaxClients: 2, Timeout: 500 * time.Millisecond})
+	defer stopServer(t, srv, db)
+	busy, idle := dial(t, addr), dial(t, addr)
+	idle.expect(status("PONG"), "PING")
+	full := dial(t, addr)
+	if got, _ := full.read().(errReply); got != errMaxClients {
+		t.Fatalf("a client over the limit got %q", got)
+	}
+	for range 6 {
+		time.Sleep(100 * time.Millisecond)
+		busy.expect(status("PONG"), "PING")
+	}
+	_ = idle.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := idle.r.ReadByte(); !errors.Is(err, io.EOF) {
+		t.Fatalf("an idle client stayed connected past the timeout: %v", err)
+	}
+	dial(t, addr).expect(status("PONG"), "PING")
+}
+
+func TestAuthThrottle(t *testing.T) {
+	srv, db, addr := startServerWith(t, t.TempDir(), Config{RequirePass: "pw"})
+	defer stopServer(t, srv, db)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve(remoteListener{ln}) }()
+
+	c := dial(t, addr)
+	for range authFailures {
+		c.expect(errReply("WRONGPASS"), "AUTH", "wrong")
+	}
+	c.expect(errReply(errAuthLimit), "AUTH", "pw")
+	c.expect(errReply(errAuthLimit), "HELLO", "2", "AUTH", "default", "pw")
+	dial(t, ln.Addr().String()).expect(status("OK"), "AUTH", "pw")
+	time.Sleep(authWindow)
+	c.expect(status("OK"), "AUTH", "pw")
+}
+
 func TestConfigSet(t *testing.T) {
 	srv, db, addr := startServer(t, t.TempDir())
 	defer stopServer(t, srv, db)

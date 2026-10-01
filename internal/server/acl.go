@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"slices"
 	"strconv"
 	"strings"
@@ -340,6 +341,59 @@ func (us *users) authenticate(name string, pass []byte) *user {
 		return nil
 	}
 	return u
+}
+
+const (
+	authFailures = 10
+	authWindow   = time.Second
+	errAuthLimit = "ERR too many failed AUTH attempts from this address, retry in a second"
+)
+
+type authThrottle struct {
+	mu    sync.Mutex
+	hosts map[string]failures
+	swept time.Time
+}
+
+type failures struct {
+	n     int
+	until time.Time
+}
+
+func (s *Server) login(c *client, name string, pass []byte) (*user, reply) {
+	host, now := hostOf(c.conn.RemoteAddr()), time.Now()
+	t := &s.throttle
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	f := t.hosts[host]
+	if !now.Before(f.until) {
+		f = failures{until: now.Add(authWindow)}
+	}
+	if f.n >= authFailures {
+		return nil, errorReply(errAuthLimit)
+	}
+	if u := s.users.authenticate(name, pass); u != nil {
+		return u, nil
+	}
+	if now.Sub(t.swept) >= authWindow {
+		maps.DeleteFunc(t.hosts, func(_ string, f failures) bool { return !now.Before(f.until) })
+		t.swept = now
+	}
+	f.n++
+	t.hosts[host] = f
+	s.aclLog.add("auth", "AUTH", name, c)
+	return nil, errorReply(errWrongPass)
+}
+
+func hostOf(addr net.Addr) string {
+	tcp, ok := addr.(*net.TCPAddr)
+	switch {
+	case !ok:
+		return addr.String()
+	case tcp.IP.To4() == nil:
+		return tcp.IP.Mask(net.CIDRMask(64, 128)).String()
+	}
+	return tcp.IP.String()
 }
 
 func (us *users) setUser(name string, rules []string) string {

@@ -29,7 +29,11 @@ type Config struct {
 	Replica       *replica.Node
 	TrackLatency  bool
 	ProtectedMode bool
+	MaxClients    int
+	Timeout       time.Duration
 }
+
+const errMaxClients = "ERR max number of clients reached"
 
 const denied = "DENIED CasketDB is running in protected mode because the default user has no password, so it accepts clients on the loopback interface only. " +
 	"Connect from the loopback interface and set a password with CONFIG SET requirepass, or restart the server with -protected-mode=false if every client that can reach it is trusted."
@@ -48,14 +52,16 @@ type Server struct {
 
 	nextID      atomic.Int64
 	connections atomic.Int64
+	rejected    atomic.Int64
 	processed   atomic.Int64
 
-	pass    atomic.Pointer[string]
-	users   *users
-	aclLog  aclLog
-	aclMu   sync.Mutex
-	maxBulk atomic.Int64
-	latency histogram
+	pass     atomic.Pointer[string]
+	users    *users
+	aclLog   aclLog
+	aclMu    sync.Mutex
+	throttle authThrottle
+	maxBulk  atomic.Int64
+	latency  histogram
 }
 
 type client struct {
@@ -65,6 +71,7 @@ type client struct {
 	w       *resp.Writer
 	name    string
 	user    *user
+	refused string
 	quit    bool
 	multi   bool
 	dirty   bool
@@ -87,6 +94,7 @@ func New(db *bitcask.DB, cfg Config) *Server {
 		started:   time.Now(),
 		listeners: make(map[net.Listener]struct{}),
 		clients:   make(map[*client]struct{}),
+		throttle:  authThrottle{hosts: make(map[string]failures)},
 	}
 	s.pass.Store(&cfg.RequirePass)
 	s.users = newUsers(cfg.RequirePass)
@@ -127,6 +135,9 @@ func (s *Server) Serve(ln net.Listener) error {
 			continue
 		}
 		backoff = 0
+		if s.cfg.Timeout > 0 {
+			conn = deadlineConn{conn, s.cfg.Timeout}
+		}
 		c := &client{
 			id:   s.nextID.Add(1),
 			conn: conn,
@@ -139,6 +150,12 @@ func (s *Server) Serve(ln net.Listener) error {
 			s.mu.Unlock()
 			conn.Close()
 			return ErrServerClosed
+		}
+		switch {
+		case s.cfg.MaxClients > 0 && len(s.clients) >= s.cfg.MaxClients:
+			c.refused = errMaxClients
+		case s.cfg.ProtectedMode && c.user != nil && !IsLoopback(conn.RemoteAddr()):
+			c.refused = denied
 		}
 		s.clients[c] = struct{}{}
 		s.wg.Add(1)
@@ -191,6 +208,21 @@ func IsLoopback(addr net.Addr) bool {
 	return ok && tcp.IP.IsLoopback()
 }
 
+type deadlineConn struct {
+	net.Conn
+	timeout time.Duration
+}
+
+func (c deadlineConn) Read(b []byte) (int, error) {
+	_ = c.SetReadDeadline(time.Now().Add(c.timeout))
+	return c.Conn.Read(b)
+}
+
+func (c deadlineConn) Write(b []byte) (int, error) {
+	_ = c.SetWriteDeadline(time.Now().Add(c.timeout))
+	return c.Conn.Write(b)
+}
+
 func (s *Server) serveClient(c *client) {
 	defer s.wg.Done()
 	defer func() {
@@ -199,8 +231,9 @@ func (s *Server) serveClient(c *client) {
 		s.mu.Unlock()
 		c.conn.Close()
 	}()
-	if s.cfg.ProtectedMode && c.user != nil && !IsLoopback(c.conn.RemoteAddr()) {
-		c.w.Error(denied)
+	if c.refused != "" {
+		s.rejected.Add(1)
+		c.w.Error(c.refused)
 		c.w.Flush()
 		return
 	}

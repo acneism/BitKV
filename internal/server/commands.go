@@ -214,10 +214,9 @@ func cmdAuth(s *Server, c *client, args [][]byte) reply {
 	if len(args) == 3 {
 		user = string(args[1])
 	}
-	u := s.users.authenticate(user, args[len(args)-1])
+	u, rep := s.login(c, user, args[len(args)-1])
 	if u == nil {
-		s.aclLog.add("auth", "AUTH", user, c)
-		return errorReply(errWrongPass)
+		return rep
 	}
 	c.user = u
 	return okReply
@@ -240,9 +239,9 @@ func cmdHello(s *Server, c *client, args [][]byte) reply {
 			if i+2 >= len(args) {
 				return errorReply(errSyntax)
 			}
-			if u = s.users.authenticate(string(args[i+1]), args[i+2]); u == nil {
-				s.aclLog.add("auth", "AUTH", string(args[i+1]), c)
-				return errorReply(errWrongPass)
+			var rep reply
+			if u, rep = s.login(c, string(args[i+1]), args[i+2]); u == nil {
+				return rep
 			}
 			i += 2
 		case "SETNAME":
@@ -418,6 +417,7 @@ func cmdInfo(s *Server, c *client, args [][]byte) reply {
 	line("")
 	line("# Clients")
 	line("connected_clients:%d", s.clientCount())
+	line("maxclients:%d", s.cfg.MaxClients)
 	line("")
 	line("# Persistence")
 	line("aof_enabled:1")
@@ -432,6 +432,7 @@ func cmdInfo(s *Server, c *client, args [][]byte) reply {
 	line("")
 	line("# Stats")
 	line("total_connections_received:%d", s.connections.Load())
+	line("rejected_connections:%d", s.rejected.Load())
 	line("total_commands_processed:%d", s.processed.Load())
 	line("expired_keys:%d", st.ExpiredKeys)
 	line("")

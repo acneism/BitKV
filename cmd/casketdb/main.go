@@ -45,6 +45,8 @@ type config struct {
 	tlsKey      string
 	tlsCA       string
 	protected   bool
+	maxClients  int
+	timeout     time.Duration
 	logLevel    string
 	logFormat   string
 	opts        bitcask.Options
@@ -67,6 +69,8 @@ func main() {
 	flag.IntVar(&cfg.maxBulk, "proto-max-bulk-len", 512<<20, "maximum bulk string length in bytes")
 	flag.StringVar(&cfg.requirePass, "requirepass", "", "password clients must AUTH with")
 	flag.BoolVar(&cfg.protected, "protected-mode", true, "while the default user has no password, refuse clients that connect from other hosts")
+	flag.IntVar(&cfg.maxClients, "maxclients", 10000, "most clients connected at once; 0 means no limit")
+	flag.DurationVar(&cfg.timeout, "timeout", 0, "close a client that sends nothing or reads no reply for this long; 0 turns it off")
 	flag.StringVar(&cfg.raftID, "raft-id", "", "raft node id; enables replication")
 	flag.StringVar(&cfg.raftPeers, "raft-peers", "", "all raft nodes including this one: id=host:port,id=host:port")
 	flag.StringVar(&cfg.raftDir, "raft-dir", "", "raft log and snapshot directory (default <dir>/raft)")
@@ -134,7 +138,7 @@ func run(logger *slog.Logger, cfg config) error {
 		}
 	}
 
-	srv := server.New(db, server.Config{MaxBulkLen: cfg.maxBulk, RequirePass: cfg.requirePass, Logger: logger, Replica: rep, TrackLatency: cfg.metricsAddr != "", ProtectedMode: cfg.protected})
+	srv := server.New(db, server.Config{MaxBulkLen: cfg.maxBulk, RequirePass: cfg.requirePass, Logger: logger, Replica: rep, TrackLatency: cfg.metricsAddr != "", ProtectedMode: cfg.protected, MaxClients: cfg.maxClients, Timeout: cfg.timeout})
 	lns, err := listen(cfg, logger, srv.AuthRequired())
 	if err != nil {
 		return errors.Join(err, closeStore(rep, db))

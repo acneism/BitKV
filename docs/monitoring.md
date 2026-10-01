@@ -24,6 +24,7 @@ The endpoint has no authentication. Bind it to a loopback or private address, or
 | `casketdb_build_info{version}` | gauge | Always 1; the label carries the CasketDB version |
 | `casketdb_connected_clients` | gauge | Open client connections |
 | `casketdb_connections_received_total` | counter | Client connections accepted since start |
+| `casketdb_rejected_connections_total` | counter | Client connections refused by `-maxclients` or protected mode |
 | `casketdb_commands_processed_total` | counter | Commands run since start |
 | `casketdb_command_duration_seconds` | histogram | Time to run a command inside the server, from parsing to the reply, without the network. A pipelined batch of writes counts each of its commands with the batch's time. EXEC counts once |
 | `casketdb_keys` | gauge | Keys in the database |

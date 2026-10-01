@@ -13,6 +13,8 @@ CasketDB is configured with command-line flags or the matching [environment vari
 | `-tls-ca` | empty | PEM certificates of the CA that signs client certificates. When set, every TLS client must present one |
 | `-requirepass` | empty | Password of the `default` user for `AUTH`, ignored once users are stored, see [access control](commands.md#access-control). Prefer `CASKETDB_REQUIREPASS`: flags are visible in the process list |
 | `-protected-mode` | `true` | While the `default` user has no password, refuse clients that connect from other hosts, see [protected mode](#protected-mode). `-protected-mode=false` turns it off |
+| `-maxclients` | `10000` | Most clients connected at once, see [client limits](#client-limits); `0` means no limit |
+| `-timeout` | `0` | Close a client that sends nothing, or reads none of its replies, for this long, for example `5m`; `0` turns it off |
 | `-dir` | `data` | Data directory |
 | `-logs` | `0` (= 4) | Number of parallel logs for a new database. An existing database keeps the number stored in its `META`; a different non-zero value is an error |
 | `-appendfsync` | `everysec` | `always`, `everysec` or `no`, see [persistence](persistence.md) |
@@ -66,6 +68,14 @@ While a new connection is signed in as `default` without a password, CasketDB se
 
 Protected mode looks at the password when a client connects. Once `default` has a password, from `-requirepass` or from `CONFIG SET requirepass` run on the loopback interface, or is turned `off` with `ACL SETUSER`, clients from other hosts get in and must authenticate. `-protected-mode=false` turns the check off; use it only where every client that can reach the server is trusted.
 
+## Client limits
+
+`-maxclients` caps the clients connected at once over both listeners, 10,000 by default as in Redis. A client over the cap gets `-ERR max number of clients reached` and is disconnected. Connections refused this way or by protected mode are counted in `rejected_connections` in `INFO` and in `casketdb_rejected_connections_total`.
+
+`-timeout` closes a client that has sent no command, or has read none of its replies, for that long. It is off by default, as in Redis; a client that keeps reading or writing is never closed.
+
+After 10 failed `AUTH` attempts from one address within a second, the server refuses every further attempt from that address, with `-ERR too many failed AUTH attempts from this address, retry in a second`, until the second is over. It does not check the password of a refused attempt, so the right password is refused too. An IPv6 address counts as its /64 network. One address can thus test about ten passwords a second; many addresses together can test more, so use a long random password.
+
 ## Examples
 
 A single node that listens on all interfaces and fsyncs every write:
@@ -89,9 +99,9 @@ casketdb -addr 127.0.0.1:6383 -dir n3 -raft-id n3 -raft-peers n1=127.0.0.1:7001,
 | Section | Fields |
 | --- | --- |
 | Server | `redis_version` (7.2.0, for client compatibility), `casketdb_version`, `redis_mode`, `os`, `process_id`, `uptime_in_seconds` |
-| Clients | `connected_clients` |
+| Clients | `connected_clients`, `maxclients` |
 | Persistence | `aof_enabled`, `appendfsync`, `bitcask_logs`, `bitcask_data_files`, `bitcask_total_bytes`, `bitcask_live_bytes`, `bitcask_merges`, `bitcask_writes`, `bitcask_fsyncs` |
-| Stats | `total_connections_received`, `total_commands_processed`, `expired_keys` |
+| Stats | `total_connections_received`, `rejected_connections`, `total_commands_processed`, `expired_keys` |
 | Replication | `role` (`master` on the leader and on a single node, `slave` on followers), `raft_state`, `raft_term`, `raft_applied_index`, `raft_leader_id`, `raft_leader_addr`, `raft_membership` (`voter`, `learner` or `none`), `raft_voters`, `raft_learners` |
 | Keyspace | `db0:keys=…,expires=…` |
 
