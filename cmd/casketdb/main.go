@@ -4,12 +4,14 @@ import (
 	"crypto/tls"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -50,7 +52,7 @@ func main() {
 	flag.DurationVar(&cfg.opts.MergeInterval, "merge-interval", cfg.opts.MergeInterval, "automatic merge check interval, 0 disables it")
 	flag.IntVar(&cfg.opts.Logs, "logs", 0, "number of parallel data logs for a new database (0 means 4; an existing database keeps its own)")
 	flag.IntVar(&cfg.maxBulk, "proto-max-bulk-len", 512<<20, "maximum bulk string length in bytes")
-	flag.StringVar(&cfg.requirePass, "requirepass", "", "password clients must AUTH with (default from CASKETDB_REQUIREPASS)")
+	flag.StringVar(&cfg.requirePass, "requirepass", "", "password clients must AUTH with")
 	flag.StringVar(&cfg.raftID, "raft-id", "", "raft node id; enables replication")
 	flag.StringVar(&cfg.raftPeers, "raft-peers", "", "all raft nodes including this one: id=host:port,id=host:port")
 	flag.StringVar(&cfg.raftDir, "raft-dir", "", "raft log and snapshot directory (default <dir>/raft)")
@@ -64,8 +66,9 @@ func main() {
 	flag.StringVar(&cfg.raftKey, "raft-tls-key", "", "PEM private key for -raft-tls-cert")
 	flag.StringVar(&cfg.raftCA, "raft-tls-ca", "", "PEM certificates of the CA that signs node certificates")
 	flag.Parse()
-	if cfg.requirePass == "" {
-		cfg.requirePass = os.Getenv("CASKETDB_REQUIREPASS")
+	if err := applyEnv(flag.CommandLine, os.LookupEnv); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
 	}
 	if cfg.raftDir == "" {
 		cfg.raftDir = filepath.Join(cfg.dir, "raft")
@@ -139,6 +142,21 @@ func run(logger *slog.Logger, cfg config) error {
 	if err == nil {
 		logger.Info("bye")
 	}
+	return err
+}
+
+func applyEnv(fs *flag.FlagSet, lookup func(string) (string, bool)) error {
+	explicit := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	var err error
+	fs.VisitAll(func(f *flag.Flag) {
+		name := "CASKETDB_" + strings.ToUpper(strings.ReplaceAll(f.Name, "-", "_"))
+		if v, ok := lookup(name); ok && !explicit[f.Name] && err == nil {
+			if serr := fs.Set(f.Name, v); serr != nil {
+				err = fmt.Errorf("%s: %w", name, serr)
+			}
+		}
+	})
 	return err
 }
 

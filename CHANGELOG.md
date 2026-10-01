@@ -2,6 +2,16 @@
 
 Versions are listed newest first. CasketDB was called BitKV up to and including v0.9.
 
+## Unreleased
+
+### Added
+
+- Every flag can be set through an environment variable, `CASKETDB_` plus the flag name in upper case with underscores: `CASKETDB_RAFT_PEERS`, `CASKETDB_APPENDFSYNC`. The command line wins. Before, only `CASKETDB_REQUIREPASS` existed.
+
+### Fixed
+
+- The server reports a failure to close the database or the Raft node when it cannot start.
+
 ## v0.11.1 — 2026-09-30
 
 ### Changed

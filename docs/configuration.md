@@ -7,7 +7,7 @@ CasketDB is configured with command-line flags. There is no configuration file a
 | Flag | Default | Description |
 | --- | --- | --- |
 | `-addr` | `127.0.0.1:6379` | TCP address for clients. A non-loopback address without a password logs a warning |
-| `-requirepass` | empty | Password for `AUTH`. If empty, `CASKETDB_REQUIREPASS` is used |
+| `-requirepass` | empty | Password for `AUTH`. Prefer `CASKETDB_REQUIREPASS`: flags are visible in the process list |
 | `-dir` | `data` | Data directory |
 | `-logs` | `0` (= 4) | Number of parallel logs for a new database. An existing database keeps the number stored in its `META`; a different non-zero value is an error |
 | `-appendfsync` | `everysec` | `always`, `everysec` or `no`, see [persistence](persistence.md) |
@@ -33,9 +33,9 @@ Sizes are given in bytes, for example `-max-file-size 134217728` for 128 MB. Dur
 
 ## Environment
 
-| Variable | Description |
-| --- | --- |
-| `CASKETDB_REQUIREPASS` | Password when `-requirepass` is not set. Keeps the password out of the process list |
+Every flag can also come from an environment variable: `CASKETDB_` and the flag name in upper case, with dashes turned into underscores. `-raft-peers` is `CASKETDB_RAFT_PEERS`, `-appendfsync` is `CASKETDB_APPENDFSYNC`. A flag on the command line wins over the variable. A value the flag does not accept stops the server with the variable's name in the error.
+
+This is also the way to keep settings in a file: `EnvironmentFile=` in a systemd unit, `--env-file` in Docker. Pass the password as `CASKETDB_REQUIREPASS` rather than `-requirepass`, which the process list shows to every user.
 
 ## Examples
 
