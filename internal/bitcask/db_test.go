@@ -980,6 +980,56 @@ func TestParallelWritersAndGlobalReaders(t *testing.T) {
 	})
 }
 
+func TestLinkFilesMakesARestorableCopy(t *testing.T) {
+	o := testOptions()
+	o.Logs = 2
+	db := mustOpen(t, t.TempDir(), o)
+	defer mustClose(t, db)
+	value := strings.Repeat("v", 40)
+	for i := range 200 {
+		put(t, db, fmt.Sprintf("k%d", i), value, 0)
+	}
+	snap := t.TempDir()
+	logs, files, err := db.LinkFiles(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	put(t, db, "after", "x", 0)
+	dir := t.TempDir()
+	for _, f := range files {
+		p := filepath.FromSlash(f.Path)
+		if err := CopyPrefix(filepath.Join(snap, p), filepath.Join(dir, p), f.Size); err != nil {
+			t.Fatal(err)
+		}
+	}
+	o.Logs = logs
+	restored := mustOpen(t, dir, o)
+	defer mustClose(t, restored)
+	n := 0
+	err = restored.Dump(func(op Op) error {
+		n++
+		if string(op.Value) != value {
+			return fmt.Errorf("%s = %q", op.Key, op.Value)
+		}
+		return nil
+	})
+	if err != nil || n != 200 {
+		t.Fatalf("dumped %d keys, err %v; want 200", n, err)
+	}
+	expectMissing(t, restored, "after")
+}
+
+func TestParseSyncPolicy(t *testing.T) {
+	for _, p := range []SyncPolicy{SyncAlways, SyncEverySec, SyncNo} {
+		if got, err := ParseSyncPolicy(strings.ToUpper(p.String())); err != nil || got != p {
+			t.Fatalf("ParseSyncPolicy(%q) = %v, %v", strings.ToUpper(p.String()), got, err)
+		}
+	}
+	if _, err := ParseSyncPolicy("never"); err == nil {
+		t.Fatal("ParseSyncPolicy accepted never")
+	}
+}
+
 func TestSetSyncTakesEffect(t *testing.T) {
 	db := mustOpen(t, t.TempDir(), testOptions())
 	defer mustClose(t, db)

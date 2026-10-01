@@ -72,7 +72,7 @@ wsl ./fault.test -test.run TestFaults -test.timeout 30m -fault.duration=5m -faul
 [GitHub Actions](.github/workflows/ci.yml) runs on every push to `main` and every pull request:
 
 - `go mod tidy -diff`, [golangci-lint](#linters) and govulncheck;
-- `go vet` and `go test` on Linux, Windows and macOS;
+- `go vet` and `go test` on Linux, Windows and macOS; on Linux with coverage, listed in the run's summary. Coverage of `internal/bitcask`, `internal/replica` and `internal/server` below 80% fails the run;
 - `go test -race` on Linux;
 - one minute of `FuzzReadCommand`.
 
@@ -113,7 +113,7 @@ Handle every error. When ignoring one is right, say so with `_ =`. The linter do
 
 ## Tests for a change
 
-- Every behavior change comes with a test that fails without it.
+- Every behavior change comes with a test that fails without it. `go test -cover ./...` shows coverage; a package's own tests count, not tests of the packages above it.
 - Use the manual clock from `internal/clock` instead of sleeping on wall time.
 - A change to the write path, recovery or merge needs a crash test: a torn tail, a cut batch or a disk image taken at the point of failure. `internal/bitcask/multilog_test.go` has helpers for this.
 - A change to the on-disk format must keep opening existing data directories, or bump the format in `META` and migrate.
