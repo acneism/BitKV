@@ -4,11 +4,14 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type category uint32
@@ -315,21 +318,92 @@ func (us *users) delete(names []string) (int, bool) {
 	return deleted, true
 }
 
-func permission(c *client, cmd command, args [][]byte) string {
+func (s *Server) permission(c *client, cmd command, args [][]byte) string {
 	p := c.user.perms.Load()
 	switch {
 	case p.all:
 		return ""
 	case !p.commands[cmd.id] && !openToEveryone(cmd, args):
+		s.aclLog.add("command", cmd.name, c.user.name, c)
 		return "NOPERM User " + c.user.name + " has no permissions to run the '" + cmd.name + "' command"
 	}
 	var kb [8]string
 	for _, key := range cmd.keys.extract(args, kb[:0]) {
 		if !p.keyAllowed(key) {
+			s.aclLog.add("key", key, c.user.name, c)
 			return "NOPERM No permissions to access a key"
 		}
 	}
 	return ""
+}
+
+const aclLogMax = 128
+
+type denial struct {
+	count                                     int64
+	reason, context, object, username, client string
+	id                                        int64
+	created, updated                          time.Time
+}
+
+type aclLog struct {
+	mu      sync.Mutex
+	entries []*denial
+	nextID  int64
+}
+
+func (l *aclLog) add(reason, object, username string, c *client) {
+	now := time.Now()
+	context := "toplevel"
+	if c.multi {
+		context = "multi"
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i, d := range l.entries {
+		if d.reason == reason && d.context == context && d.object == object && d.username == username && now.Sub(d.updated) < time.Minute {
+			d.count++
+			d.updated = now
+			copy(l.entries[1:i+1], l.entries[:i])
+			l.entries[0] = d
+			return
+		}
+	}
+	client := fmt.Sprintf("id=%d addr=%s laddr=%s name=%s", c.id, c.conn.RemoteAddr(), c.conn.LocalAddr(), c.name)
+	d := &denial{count: 1, reason: reason, context: context, object: object, username: username, client: client, id: l.nextID, created: now, updated: now}
+	l.nextID++
+	l.entries = append([]*denial{d}, l.entries...)
+	if len(l.entries) > aclLogMax {
+		l.entries = l.entries[:aclLogMax]
+	}
+}
+
+func (l *aclLog) reply(n int) arrayReply {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	out := arrayReply{}
+	for _, d := range l.entries[:min(n, len(l.entries))] {
+		out = append(out, arrayReply{
+			bulkReply("count"), intReply(d.count),
+			bulkReply("reason"), bulkReply(d.reason),
+			bulkReply("context"), bulkReply(d.context),
+			bulkReply("object"), bulkReply(d.object),
+			bulkReply("username"), bulkReply(d.username),
+			bulkReply("age-seconds"), bulkReply(strconv.FormatFloat(now.Sub(d.created).Seconds(), 'f', 3, 64)),
+			bulkReply("client-info"), bulkReply(d.client),
+			bulkReply("entry-id"), intReply(d.id),
+			bulkReply("timestamp-created"), intReply(d.created.UnixMilli()),
+			bulkReply("timestamp-last-updated"), intReply(d.updated.UnixMilli()),
+		})
+	}
+	return out
+}
+
+func (l *aclLog) reset() {
+	l.mu.Lock()
+	l.entries = nil
+	l.mu.Unlock()
 }
 
 func openToEveryone(cmd command, args [][]byte) bool {
@@ -400,6 +474,17 @@ func cmdACL(s *Server, c *client, args [][]byte) reply {
 		}
 		s.log.Info("ACL users deleted", "users", names, "by", c.user.name)
 		return intReply(n)
+	case sub == "LOG" && len(args) == 2:
+		return s.aclLog.reply(10)
+	case sub == "LOG" && len(args) == 3 && upper(args[2]) == "RESET":
+		s.aclLog.reset()
+		return okReply
+	case sub == "LOG" && len(args) == 3:
+		n, ok := parseInt(args[2])
+		if !ok || n < 0 {
+			return errorReply(errNotInteger)
+		}
+		return s.aclLog.reply(int(min(n, aclLogMax)))
 	case sub == "CAT" && len(args) == 2:
 		return stringsReply(categoryNames)
 	case sub == "CAT" && len(args) == 3:

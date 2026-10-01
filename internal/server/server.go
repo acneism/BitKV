@@ -48,6 +48,7 @@ type Server struct {
 
 	pass    atomic.Pointer[string]
 	users   *users
+	aclLog  aclLog
 	maxBulk atomic.Int64
 	latency histogram
 }
@@ -278,7 +279,7 @@ func (s *Server) execute(c *client, args [][]byte) {
 		c.quit = true
 		return
 	case c.user != nil && !cmd.noAuth:
-		if msg := permission(c, cmd, args); msg != "" {
+		if msg := s.permission(c, cmd, args); msg != "" {
 			c.reject(errorReply(msg))
 			return
 		}

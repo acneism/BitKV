@@ -9,6 +9,45 @@ import (
 	"testing"
 )
 
+func TestACLLog(t *testing.T) {
+	srv, db, addr := startServer(t, t.TempDir())
+	defer stopServer(t, srv, db)
+	admin := dial(t, addr)
+	admin.expect(status("OK"), "ACL", "SETUSER", "bob", "on", ">pw", "~b:*", "+get", "+multi", "+discard")
+	bob := dial(t, addr)
+	bob.expect(errReply("WRONGPASS"), "AUTH", "bob", "wrong")
+	bob.expect(status("OK"), "AUTH", "bob", "pw")
+	bob.expect(errReply("NOPERM"), "GET", "a:1")
+	bob.expect(errReply("NOPERM"), "GET", "a:1")
+	bob.expect(status("OK"), "MULTI")
+	bob.expect(errReply("NOPERM"), "SET", "b:1", "v")
+	bob.expect(status("OK"), "DISCARD")
+
+	log, _ := admin.do("ACL", "LOG").([]any)
+	want := [][]any{
+		{int64(1), "command", "multi", "set", "bob"},
+		{int64(2), "key", "toplevel", "a:1", "bob"},
+		{int64(1), "auth", "toplevel", "AUTH", "bob"},
+	}
+	if len(log) != len(want) {
+		t.Fatalf("ACL LOG has %d entries, want %d: %#v", len(log), len(want), log)
+	}
+	for i, w := range want {
+		e, _ := log[i].([]any)
+		if len(e) != 20 {
+			t.Fatalf("entry %d = %#v", i, e)
+		}
+		if got := []any{e[1], e[3], e[5], e[7], e[9]}; !slices.Equal(got, w) {
+			t.Fatalf("entry %d = %#v, want %#v", i, got, w)
+		}
+	}
+	if one, _ := admin.do("ACL", "LOG", "1").([]any); len(one) != 1 {
+		t.Fatalf("ACL LOG 1 = %#v", one)
+	}
+	admin.expect(status("OK"), "ACL", "LOG", "RESET")
+	admin.expect([]any{}, "ACL", "LOG")
+}
+
 func TestACL(t *testing.T) {
 	srv, db, addr := startServer(t, t.TempDir())
 	defer stopServer(t, srv, db)

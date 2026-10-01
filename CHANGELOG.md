@@ -8,7 +8,7 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 
 - TLS for clients: `-tls-addr` with `-tls-cert` and `-tls-key` opens a listener for TLS 1.2 and 1.3 next to `-addr`, and `-tls-ca` makes clients present a certificate. The certificate is read again when its file changes. `-addr ""` turns plain text off. See [TLS for clients](docs/configuration.md#tls-for-clients).
 - A warning when clients on a non-loopback `-addr` send the password in plain text.
-- ACL users: `ACL SETUSER`, `GETUSER`, `DELUSER`, `LIST`, `USERS`, `WHOAMI` and `CAT`, `AUTH <user> <password>`, permissions by command, category and key pattern, `NOPERM` replies. Users are kept in memory on one node for now. See [access control](docs/commands.md#access-control).
+- ACL users: `ACL SETUSER`, `GETUSER`, `DELUSER`, `LIST`, `USERS`, `WHOAMI`, `CAT` and `LOG`, `AUTH <user> <password>`, permissions by command, category and key pattern, `NOPERM` replies. Users are kept in memory on one node for now. See [access control](docs/commands.md#access-control).
 
 ## v0.12 — 2026-10-01
 

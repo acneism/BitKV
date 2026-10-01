@@ -216,6 +216,7 @@ func cmdAuth(s *Server, c *client, args [][]byte) reply {
 	}
 	u := s.users.authenticate(user, args[len(args)-1])
 	if u == nil {
+		s.aclLog.add("auth", "AUTH", user, c)
 		return errorReply(errWrongPass)
 	}
 	c.user = u
@@ -240,6 +241,7 @@ func cmdHello(s *Server, c *client, args [][]byte) reply {
 				return errorReply(errSyntax)
 			}
 			if u = s.users.authenticate(string(args[i+1]), args[i+2]); u == nil {
+				s.aclLog.add("auth", "AUTH", string(args[i+1]), c)
 				return errorReply(errWrongPass)
 			}
 			i += 2
