@@ -185,7 +185,7 @@ openssl x509 -req -in n1.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 825 
 
 All nodes of a cluster use TLS or none does: a node without TLS, or with a certificate from another CA, cannot talk to the others. To turn TLS on in a running cluster, restart all nodes with the flags. A certificate is read at start, so renewing it means restarting the node. To move to a new CA, first put both CAs into every node's `-raft-tls-ca` file and restart the nodes one by one, then switch the node certificates.
 
-TLS covers only traffic between nodes. Client connections are not encrypted yet; see [SECURITY.md](../SECURITY.md#security-model).
+These flags cover only traffic between nodes. Serve clients over TLS with `-tls-addr`; see [TLS for clients](configuration.md#tls-for-clients).
 
 ## Upgrades
 

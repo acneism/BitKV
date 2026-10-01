@@ -23,5 +23,37 @@ Deploy CasketDB with these properties in mind:
 - **Password in the environment.** Prefer `CASKETDB_REQUIREPASS` to `-requirepass`: command-line flags are visible in the process list.
 - **Raft transport.** Turn on mutual TLS between nodes with `-raft-tls-cert`, `-raft-tls-key` and `-raft-tls-ca`: traffic is encrypted and a node must present a certificate for its own id. Without TLS, nodes trust any peer that connects to the Raft port, and the server logs a warning when its Raft address is not a loopback address. Either way, firewall Raft ports from clients. See [mutual TLS between nodes](docs/replication.md#mutual-tls-between-nodes).
 - **Private files.** CasketDB creates its directories with mode `0700` and its files with `0600`, so other users of the server cannot read the data. It does not change the mode of an existing directory; if `-dir` or the Raft directory is open to other users, the server logs a warning at start. On Windows, access follows the ACLs inherited from the parent directory.
-- **No encryption at rest.** Data files hold keys and values as written. Protect the data directory with file-system permissions or disk encryption.
+- **No encryption at rest.** Data files, the Raft log and snapshots hold keys and values as written. Put them on an encrypted volume; see [encryption at rest](#encryption-at-rest).
 - **Protocol limits.** A bulk string is limited by `-proto-max-bulk-len` (512 MB by default), a command by 1,048,576 arguments and an inline command by 64 KB. Until a client authenticates, a command may carry at most 10 arguments of 16 KB each, as in Redis, so a client without the password cannot make the server hold large requests. Large bulk strings are read as they arrive, never preallocated from the declared size.
+
+## Encryption at rest
+
+CasketDB does not encrypt what it writes. Keys and values are stored as written in:
+
+- the data files under `-dir`, including values that were deleted or overwritten and not yet merged away; hint files hold keys;
+- the Raft log and snapshots under `-raft-dir`, on cluster nodes;
+- `SYSTEM` in `-dir`, which holds the users and their password hashes;
+- every backup or copy of these directories.
+
+Keep them on an encrypted volume. `-raft-dir` is inside `-dir` by default; if you move it, encrypt its volume too.
+
+| Platform | Use |
+| --- | --- |
+| Linux | LUKS (dm-crypt) for the volume, or fscrypt for the directories on ext4 and f2fs |
+| Windows | BitLocker |
+| macOS | FileVault |
+| Cloud | GCP persistent disks and Azure managed disks are encrypted by default. An AWS EBS volume is encrypted only when created so, or when the account turns on EBS encryption by default |
+| Kubernetes | A StorageClass that provisions encrypted volumes |
+
+Disk encryption protects a stolen or discarded disk and volume snapshots. It does not protect against anyone who can read the files on the running server, as root or as the user CasketDB runs as; file permissions cover that, see [private files](#security-model).
+
+Deleted data stays on the disk for a while: an old value remains in the data files until a merge rewrites them, in the Raft log until it is compacted, and on an SSD possibly in freed blocks after that. On an encrypted volume, destroying its key makes all of it unreadable.
+
+Data in memory can reach the disk too:
+
+- **Swap.** Keys, values, passwords sent with AUTH and the TLS private keys live in process memory and can be swapped out. On Linux, use encrypted swap, for example a dm-crypt swap with a random key set in `/etc/crypttab`, or turn swap off. macOS encrypts swap; on Windows, BitLocker on the drive that holds the page file covers it.
+- **Core dumps.** A Go program writes no core dump when it crashes unless `GOTRACEBACK=crash` is set. Leave it unset, or forbid core dumps with `ulimit -c 0` or `LimitCORE=0` in the systemd unit.
+
+Two more files deserve care. The TLS private keys of `-tls-key` and `-raft-tls-key` live wherever you put them; make them readable only by the user CasketDB runs as. `SYSTEM` stores passwords as unsalted SHA-256 hashes, as Redis does, so whoever reads it can test guesses offline at high speed: give users long random passwords, such as the output of `openssl rand -hex 32`.
+
+To keep values secret even from whoever can read the disks or the server's memory, encrypt them in the application before writing them.
