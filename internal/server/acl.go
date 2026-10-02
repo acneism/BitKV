@@ -33,9 +33,10 @@ const (
 	catDangerous
 	catConnection
 	catTransaction
+	catBitmap
 )
 
-var categoryNames = []string{"keyspace", "read", "write", "string", "fast", "slow", "admin", "dangerous", "connection", "transaction"}
+var categoryNames = []string{"keyspace", "read", "write", "string", "fast", "slow", "admin", "dangerous", "connection", "transaction", "bitmap"}
 
 func (cmd command) categories() category {
 	c := cmd.acl

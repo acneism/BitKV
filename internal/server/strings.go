@@ -302,9 +302,6 @@ func cmdGetEx(tx *bitcask.Tx, args [][]byte) (reply, error) {
 }
 
 func byteRange(n, start, end int64) (int64, int64) {
-	if start < 0 && end < 0 && start > end {
-		return 0, 0
-	}
 	if start < 0 {
 		start = max(n+start, 0)
 	}
@@ -327,6 +324,9 @@ func cmdGetRange(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	value, _, err := tx.Get(string(args[1]))
 	if err != nil {
 		return readError(err)
+	}
+	if start < 0 && end < 0 && start > end {
+		return bulkReply(""), nil
 	}
 	from, to := byteRange(int64(len(value)), start, end)
 	return bulkReply(value[from:to]), nil

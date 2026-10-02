@@ -413,6 +413,78 @@ func TestStringCommands(t *testing.T) {
 	c.expect("", "LCS", "missing1", "missing2")
 }
 
+func TestBitCommands(t *testing.T) {
+	srv, db, addr := startServer(t, t.TempDir())
+	defer stopServer(t, srv, db)
+	c := dial(t, addr)
+
+	c.expect(int64(0), "SETBIT", "b", "7", "1")
+	c.expect(int64(1), "SETBIT", "b", "7", "0")
+	c.expect("\x00", "GET", "b")
+	c.expect(int64(0), "SETBIT", "b", "7", "1")
+	c.expect(int64(1), "GETBIT", "b", "7")
+	c.expect(int64(0), "GETBIT", "b", "100")
+	c.expect(errReply(errBitOffset), "SETBIT", "b", "-1", "1")
+	c.expect(errReply(errBitOffset), "SETBIT", "b", "4294967296", "1")
+	c.expect(errReply("ERR bit is not an integer or out of range"), "SETBIT", "b", "1", "2")
+
+	c.expect(status("OK"), "SET", "s", "foobar")
+	for want, cmd := range map[int64][]string{26: {}, 4: {"0", "0"}, 6: {"1", "1", "BYTE"}, 17: {"5", "30", "BIT"}, 0: {"-1", "-5"}} {
+		c.expect(want, append([]string{"BITCOUNT", "s"}, cmd...)...)
+	}
+	c.expect(int64(0), "BITCOUNT", "missing")
+	c.expect(errReply(errSyntax), "BITCOUNT", "s", "0")
+
+	c.expect(status("OK"), "SET", "p", "\xff\xf0\x00")
+	c.expect(int64(12), "BITPOS", "p", "0")
+	c.expect(status("OK"), "SET", "p", "\x00\xff\xf0")
+	for want, cmd := range map[int64][]string{8: {"1", "0"}, 16: {"1", "2", "-1", "BYTE"}, 20: {"0", "2", "-1"}, 9: {"1", "9", "15", "BIT"}} {
+		c.expect(want, append([]string{"BITPOS", "p"}, cmd...)...)
+	}
+	c.expect(int64(8), "BITPOS", "p", "1", "7", "15", "BIT")
+	c.expect(status("OK"), "SET", "z", "\x00\x00\x00")
+	c.expect(int64(-1), "BITPOS", "z", "1")
+	c.expect(int64(-1), "BITPOS", "z", "1", "7", "-3", "BIT")
+	c.expect(status("OK"), "SET", "ones", "\xff\xff")
+	c.expect(int64(16), "BITPOS", "ones", "0")
+	c.expect(int64(-1), "BITPOS", "ones", "0", "0", "-1")
+	c.expect(int64(-1), "BITPOS", "missing", "1")
+	c.expect(int64(0), "BITPOS", "missing", "0")
+	c.expect(errReply("ERR The bit argument must be 1 or 0."), "BITPOS", "p", "2")
+
+	c.expect(status("OK"), "MSET", "key1", "foobar", "key2", "abcdef")
+	c.expect(int64(6), "BITOP", "AND", "dest", "key1", "key2")
+	c.expect("`bc`ab", "GET", "dest")
+	c.expect(int64(6), "BITOP", "OR", "dest", "key1", "key2")
+	c.expect("goofev", "GET", "dest")
+	c.expect(int64(6), "BITOP", "XOR", "dest", "key1", "missing")
+	c.expect("foobar", "GET", "dest")
+	c.expect(int64(1), "BITOP", "NOT", "dest", "b")
+	c.expect("\xfe", "GET", "dest")
+	c.expect(int64(0), "BITOP", "NOT", "dest", "missing")
+	c.expect(int64(0), "EXISTS", "dest")
+	c.expect(errReply("ERR BITOP NOT must be called with a single source key."), "BITOP", "NOT", "dest", "key1", "key2")
+	c.expect(errReply(errSyntax), "BITOP", "NAND", "dest", "key1")
+
+	c.expect([]any{int64(1), int64(0)}, "BITFIELD", "f", "INCRBY", "i5", "100", "1", "GET", "u4", "0")
+	sat := []string{"BITFIELD", "o", "INCRBY", "u2", "100", "1", "OVERFLOW", "SAT", "INCRBY", "u2", "102", "1"}
+	for _, want := range [][2]int64{{1, 1}, {2, 2}, {3, 3}, {0, 3}} {
+		c.expect([]any{want[0], want[1]}, sat...)
+	}
+	c.expect([]any{nil}, "BITFIELD", "o", "OVERFLOW", "FAIL", "INCRBY", "u2", "102", "1")
+	c.expect([]any{int64(0), int64(0)}, "BITFIELD", "h", "SET", "i8", "#0", "100", "SET", "i8", "#1", "200")
+	c.expect([]any{int64(100), int64(-56)}, "BITFIELD", "h", "GET", "i8", "#0", "GET", "i8", "#1")
+	c.expect([]any{int64(0), int64(-128), int64(-128)}, "BITFIELD", "w", "SET", "i8", "0", "127", "INCRBY", "i8", "0", "1", "OVERFLOW", "SAT", "INCRBY", "i8", "0", "-1")
+	c.expect([]any{int64(127), int64(127)}, "BITFIELD", "w", "OVERFLOW", "SAT", "INCRBY", "i8", "0", "300", "GET", "i8", "0")
+	c.expect([]any{int64(0)}, "BITFIELD_RO", "nothing", "GET", "i8", "16")
+	c.expect(int64(0), "EXISTS", "nothing")
+	c.expect(errReply("ERR BITFIELD_RO only supports the GET subcommand"), "BITFIELD_RO", "h", "SET", "i8", "0", "1")
+	c.expect(errReply(errBitType), "BITFIELD", "h", "GET", "u64", "0")
+	c.expect(errReply("ERR Invalid OVERFLOW type specified"), "BITFIELD", "h", "OVERFLOW", "NONE")
+	c.expect([]any{nil}, "BITFIELD", "grow", "OVERFLOW", "FAIL", "SET", "u2", "8", "7")
+	c.expect("\x00\x00", "GET", "grow")
+}
+
 func TestKeysAndScan(t *testing.T) {
 	srv, db, addr := startServer(t, t.TempDir())
 	defer stopServer(t, srv, db)
