@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 
 	"github.com/acneism/casketdb/internal/bitcask"
@@ -15,10 +16,11 @@ import (
 )
 
 const (
-	kindOps    byte = 1
-	kindFlush  byte = 2
-	kindSystem byte = 3
-	flagDelete byte = 1
+	kindOps      byte = 1
+	kindFlush    byte = 2
+	kindSystem   byte = 3
+	kindTypedOps byte = 4
+	flagDelete   byte = 1
 
 	restoreBatch = 1024
 	restoreDir   = "restore"
@@ -65,8 +67,8 @@ func (f *bitcaskFSM) Apply(ents []raft.Entry) error {
 			return errEntry
 		}
 		switch e.Data[0] {
-		case kindOps:
-			decoded, err := decodeOps(bytes.NewReader(e.Data[1:]))
+		case kindOps, kindTypedOps:
+			decoded, err := decodeOps(bytes.NewReader(e.Data[1:]), e.Data[0] == kindTypedOps)
 			if err != nil {
 				return err
 			}
@@ -179,21 +181,24 @@ func (f *bitcaskFSM) Restore(src node.SnapshotSource) error {
 }
 
 func encodeEntry(kind byte, ops []bitcask.Op) []byte {
+	if kind == kindOps && slices.ContainsFunc(ops, func(op bitcask.Op) bool { return op.Kind != 0 }) {
+		kind = kindTypedOps
+	}
 	size := 1
 	for _, op := range ops {
-		size += 1 + 3*binary.MaxVarintLen64 + len(op.Key) + len(op.Value)
+		size += 2 + 3*binary.MaxVarintLen64 + len(op.Key) + len(op.Value)
 	}
 	b := append(make([]byte, 0, size), kind)
 	for _, op := range ops {
-		b = appendOp(b, op)
+		b = appendOp(b, op, kind == kindTypedOps)
 	}
 	return b
 }
 
-func decodeOps(body *bytes.Reader) ([]bitcask.Op, error) {
+func decodeOps(body *bytes.Reader, typed bool) ([]bitcask.Op, error) {
 	var ops []bitcask.Op
 	for body.Len() > 0 {
-		op, err := readOp(body)
+		op, err := readOp(body, typed)
 		if err != nil {
 			return nil, errEntry
 		}
@@ -202,12 +207,15 @@ func decodeOps(body *bytes.Reader) ([]bitcask.Op, error) {
 	return ops, nil
 }
 
-func appendOp(b []byte, op bitcask.Op) []byte {
+func appendOp(b []byte, op bitcask.Op, typed bool) []byte {
 	var flags byte
 	if op.Delete {
 		flags = flagDelete
 	}
 	b = append(b, flags)
+	if typed {
+		b = append(b, byte(op.Kind))
+	}
 	b = binary.AppendVarint(b, op.ExpireAt)
 	b = binary.AppendUvarint(b, uint64(len(op.Key)))
 	b = append(b, op.Key...)
@@ -215,12 +223,19 @@ func appendOp(b []byte, op bitcask.Op) []byte {
 	return append(b, op.Value...)
 }
 
-func readOp(r *bytes.Reader) (bitcask.Op, error) {
+func readOp(r *bytes.Reader, typed bool) (bitcask.Op, error) {
 	flags, err := r.ReadByte()
 	if err != nil {
 		return bitcask.Op{}, err
 	}
 	op := bitcask.Op{Delete: flags&flagDelete != 0}
+	if typed {
+		kind, err := r.ReadByte()
+		if err != nil {
+			return op, unexpected(err)
+		}
+		op.Kind = bitcask.Kind(kind)
+	}
 	if op.ExpireAt, err = binary.ReadVarint(r); err != nil {
 		return op, unexpected(err)
 	}

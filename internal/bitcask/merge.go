@@ -120,7 +120,8 @@ func (g *logGroup) writeMerge(dir string, inputs []*dataFile, boundary, reserve 
 				res.expired = append(res.expired, relocation{key: key, oldFile: df.id, oldOffset: rec.offset})
 				continue
 			}
-			id, off, err := w.write(key, rec.value, e.expireAt)
+			kind, value := splitStored(rec.flags, rec.value)
+			id, off, err := w.write(key, kind, value, e.expireAt)
 			if err != nil {
 				return nil, err
 			}
@@ -219,19 +220,20 @@ type mergeWriter struct {
 	ids     []uint32
 }
 
-func (w *mergeWriter) write(key string, value []byte, expireAt int64) (uint32, int64, error) {
-	n := recordSize(len(key), len(value))
+func (w *mergeWriter) write(key string, kind Kind, value []byte, expireAt int64) (uint32, int64, error) {
+	stored := storedSize(kind, value)
+	n := recordSize(len(key), stored)
 	if w.data == nil || (w.size > 0 && w.size+n > w.maxSize && w.nextID <= w.lastID) {
 		if err := w.rotate(); err != nil {
 			return 0, 0, err
 		}
 	}
 	off := w.size
-	w.buf = appendRecord(w.buf[:0], 0, expireAt, key, value)
+	w.buf = appendRecord(w.buf[:0], 0, expireAt, key, kind, value)
 	if _, err := w.dw.Write(w.buf); err != nil {
 		return 0, 0, err
 	}
-	w.buf = appendHint(w.buf[:0], expireAt, off, key, uint32(len(value)))
+	w.buf = appendHint(w.buf[:0], expireAt, off, key, uint32(stored))
 	if _, err := w.hw.Write(w.buf); err != nil {
 		return 0, 0, err
 	}

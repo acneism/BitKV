@@ -285,14 +285,16 @@ func entry(index uint64, kind byte, ops ...bitcask.Op) raft.Entry {
 }
 
 func FuzzEntry(f *testing.F) {
-	f.Add(encodeEntry(kindOps, []bitcask.Op{{Key: "k", Value: []byte("v"), ExpireAt: 5}, {Key: "d", Delete: true}})[1:])
-	f.Add([]byte{0, 0, 0xff, 0xff, 0xff, 0xff, 0x0f})
-	f.Fuzz(func(t *testing.T, data []byte) {
-		ops, err := decodeOps(bytes.NewReader(data))
+	f.Add(false, encodeEntry(kindOps, []bitcask.Op{{Key: "k", Value: []byte("v"), ExpireAt: 5}, {Key: "d", Delete: true}})[1:])
+	f.Add(true, encodeEntry(kindOps, []bitcask.Op{{Key: "h", Value: []byte("fields"), Kind: 1}, {Key: "s", Value: []byte("v")}})[1:])
+	f.Add(false, []byte{0, 0, 0xff, 0xff, 0xff, 0xff, 0x0f})
+	f.Fuzz(func(t *testing.T, typed bool, data []byte) {
+		ops, err := decodeOps(bytes.NewReader(data), typed)
 		if err != nil {
 			return
 		}
-		again, err := decodeOps(bytes.NewReader(encodeEntry(kindOps, ops)[1:]))
+		entry := encodeEntry(kindOps, ops)
+		again, err := decodeOps(bytes.NewReader(entry[1:]), entry[0] == kindTypedOps)
 		if err != nil || !reflect.DeepEqual(again, ops) {
 			t.Fatalf("ops %#v came back as %#v, %v", ops, again, err)
 		}
@@ -456,7 +458,7 @@ func TestApplyKeepsLogOrder(t *testing.T) {
 		entry(3, kindOps, set("a", "2"), bitcask.Op{Key: "b", Delete: true}),
 		entry(4, kindOps, set("b", "3")),
 		entry(5, kindFlush),
-		entry(6, kindOps, set("a", "4")),
+		entry(6, kindOps, set("a", "4"), bitcask.Op{Key: "h", Value: []byte("fields"), Kind: 3}),
 		{Index: 7, Term: 1, Type: raft.EntryConfChange, Data: []byte{9}},
 		entry(8, kindOps, set("b", "5"), bitcask.Op{Key: "a", Delete: true}),
 	}))
@@ -466,6 +468,12 @@ func TestApplyKeepsLogOrder(t *testing.T) {
 			t.Fatalf("%s = %q, want %q", k, got, want)
 		}
 	}
+	must(t, db.View(bitcask.Keys("h"), func(tx *bitcask.Tx) error {
+		if v, kind, ok, err := tx.GetKind("h"); string(v) != "fields" || kind != 3 || !ok || err != nil {
+			t.Fatalf("typed value = %q, %d, %v, %v", v, kind, ok, err)
+		}
+		return nil
+	}))
 	if f.applied.Load() != 8 {
 		t.Fatalf("applied %d, want 8", f.applied.Load())
 	}

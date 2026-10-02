@@ -6,18 +6,18 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
 
 const (
-	metaName     = "META"
-	flushName    = "FLUSH"
-	metaMagic    = "casketdb-meta 1"
-	oldMetaMagic = "bitkv-meta 1"
-	defaultLogs  = 4
-	dirMode      = 0o700
-	fileMode     = 0o600
+	metaName    = "META"
+	flushName   = "FLUSH"
+	metaMagic   = "casketdb-meta 2"
+	defaultLogs = 4
+	dirMode     = 0o700
+	fileMode    = 0o600
 )
 
 var ErrLayout = errors.New("bitcask: incompatible data directory layout")
@@ -30,11 +30,11 @@ func (db *DB) layout() ([]string, error) {
 	if db.opts.Logs < 0 || db.opts.Logs > numShards {
 		return nil, fmt.Errorf("%w: logs must be between 1 and %d", ErrLayout, numShards)
 	}
-	logs, found, err := readMeta(db.dir)
+	logs, magic, err := readMeta(db.dir)
 	if err != nil {
 		return nil, err
 	}
-	if !found {
+	if magic == "" {
 		legacy, err := listIDs(db.dir, dataExt)
 		if err != nil {
 			return nil, err
@@ -49,11 +49,13 @@ func (db *DB) layout() ([]string, error) {
 		if logs == 0 {
 			logs = defaultLogs
 		}
+	} else if db.opts.Logs != 0 && db.opts.Logs != logs {
+		return nil, fmt.Errorf("%w: %s was created with %d logs, options ask for %d", ErrLayout, db.dir, logs, db.opts.Logs)
+	}
+	if magic != metaMagic {
 		if err := writeAtomic(db.dir, metaName, []byte(fmt.Sprintf("%s\nlogs %d\n", metaMagic, logs))); err != nil {
 			return nil, err
 		}
-	} else if db.opts.Logs != 0 && db.opts.Logs != logs {
-		return nil, fmt.Errorf("%w: %s was created with %d logs, options ask for %d", ErrLayout, db.dir, logs, db.opts.Logs)
 	}
 	dirs := make([]string, logs)
 	for i := range dirs {
@@ -62,23 +64,23 @@ func (db *DB) layout() ([]string, error) {
 	return dirs, nil
 }
 
-func readMeta(root string) (int, bool, error) {
+func readMeta(root string) (int, string, error) {
 	raw, err := os.ReadFile(filepath.Join(root, metaName))
 	if errors.Is(err, fs.ErrNotExist) {
-		return 0, false, nil
+		return 0, "", nil
 	}
 	if err != nil {
-		return 0, false, err
+		return 0, "", err
 	}
 	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
-	if len(lines) < 2 || (lines[0] != metaMagic && lines[0] != oldMetaMagic) {
-		return 0, false, fmt.Errorf("%w: unrecognized %s", ErrLayout, metaName)
+	if len(lines) < 2 || !slices.Contains([]string{metaMagic, "casketdb-meta 1", "bitkv-meta 1"}, lines[0]) {
+		return 0, "", fmt.Errorf("%w: unrecognized %s", ErrLayout, metaName)
 	}
 	logs, err := strconv.Atoi(strings.TrimPrefix(lines[1], "logs "))
 	if err != nil || logs < 1 || logs > numShards {
-		return 0, false, fmt.Errorf("%w: bad log count in %s", ErrLayout, metaName)
+		return 0, "", fmt.Errorf("%w: bad log count in %s", ErrLayout, metaName)
 	}
-	return logs, true, nil
+	return logs, lines[0], nil
 }
 
 func writeAtomic(dir, name string, data []byte) error {

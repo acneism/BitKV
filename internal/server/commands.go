@@ -21,7 +21,15 @@ const (
 	errOverflow   = "ERR increment or decrement would overflow"
 	errWrongPass  = "WRONGPASS invalid username-password pair or user is disabled."
 	errBadName    = "ERR Client names cannot contain spaces, newlines or special characters."
+	errWrongType  = "WRONGTYPE Operation against a key holding the wrong kind of value"
 )
+
+func readError(err error) (reply, error) {
+	if errors.Is(err, bitcask.ErrWrongKind) {
+		return errorReply(errWrongType), nil
+	}
+	return nil, err
+}
 
 type kind int
 

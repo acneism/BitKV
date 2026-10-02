@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"math"
 	"strconv"
 
@@ -26,8 +27,11 @@ var stringCommands = map[string]command{
 
 func cmdGet(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	value, found, err := tx.Get(string(args[1]))
-	if err != nil || !found {
-		return nilReply, err
+	if err != nil {
+		return readError(err)
+	}
+	if !found {
+		return nilReply, nil
 	}
 	return bulkReply(value), nil
 }
@@ -72,7 +76,7 @@ func cmdSet(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	if get {
 		old, found, err := tx.Get(key)
 		if err != nil {
-			return nil, err
+			return readError(err)
 		}
 		result, existed = nilReply, found
 		if found {
@@ -125,8 +129,11 @@ func setWithExpire(tx *bitcask.Tx, args [][]byte, unit, name string) (reply, err
 func cmdGetDel(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	key := string(args[1])
 	value, found, err := tx.Get(key)
-	if err != nil || !found {
-		return nilReply, err
+	if err != nil {
+		return readError(err)
+	}
+	if !found {
+		return nilReply, nil
 	}
 	tx.Delete(key)
 	return bulkReply(value), nil
@@ -136,7 +143,7 @@ func cmdMGet(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	out := make(arrayReply, len(args)-1)
 	for i, key := range args[1:] {
 		value, found, err := tx.Get(string(key))
-		if err != nil {
+		if err != nil && !errors.Is(err, bitcask.ErrWrongKind) {
 			return nil, err
 		}
 		if found {
@@ -162,7 +169,7 @@ func cmdAppend(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	key := string(args[1])
 	old, _, err := tx.Get(key)
 	if err != nil {
-		return nil, err
+		return readError(err)
 	}
 	expireAt, _ := tx.ExpireAt(key)
 	value := make([]byte, 0, len(old)+len(args[2]))
@@ -175,7 +182,7 @@ func cmdAppend(tx *bitcask.Tx, args [][]byte) (reply, error) {
 func cmdStrlen(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	value, _, err := tx.Get(string(args[1]))
 	if err != nil {
-		return nil, err
+		return readError(err)
 	}
 	return intReply(len(value)), nil
 }
@@ -211,7 +218,7 @@ func incrBy(tx *bitcask.Tx, rawKey []byte, delta int64) (reply, error) {
 	key := string(rawKey)
 	value, found, err := tx.Get(key)
 	if err != nil {
-		return nil, err
+		return readError(err)
 	}
 	var current int64
 	if found {

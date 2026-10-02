@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -1021,6 +1022,56 @@ func TestLinkFilesMakesARestorableCopy(t *testing.T) {
 	expectMissing(t, restored, "after")
 }
 
+func TestKinds(t *testing.T) {
+	dir := t.TempDir()
+	o := testOptions()
+	db := mustOpen(t, dir, o)
+	if err := db.Update(Keys("h", "s"), func(tx *Tx) error {
+		tx.PutKind("h", 3, []byte("fields"), 0)
+		tx.Put("s", []byte("text"), 0)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	check := func(db *DB) {
+		t.Helper()
+		if err := db.View(Keys("h", "s"), func(tx *Tx) error {
+			if _, _, err := tx.Get("h"); !errors.Is(err, ErrWrongKind) {
+				t.Errorf("Get of a typed value = %v, want ErrWrongKind", err)
+			}
+			if v, kind, ok, err := tx.GetKind("h"); string(v) != "fields" || kind != 3 || !ok || err != nil {
+				t.Errorf("GetKind = %q, %d, %v, %v", v, kind, ok, err)
+			}
+			if v, kind, ok, err := tx.GetKind("s"); string(v) != "text" || kind != 0 || !ok || err != nil {
+				t.Errorf("GetKind of a string = %q, %d, %v, %v", v, kind, ok, err)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.View(Shardwise(), func(tx *Tx) error {
+			if _, keys := tx.Scan(0, math.MaxInt, nil, func(k Kind) bool { return k == 3 }); !slices.Equal(keys, []string{"h"}) {
+				t.Errorf("Scan of kind 3 = %v", keys)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		var ops []Op
+		if err := db.Dump(func(op Op) error { ops = append(ops, op); return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.ContainsFunc(ops, func(op Op) bool { return op.Key == "h" && op.Kind == 3 && string(op.Value) == "fields" }) {
+			t.Errorf("Dump = %+v", ops)
+		}
+	}
+	check(db)
+	if err := db.Merge(); err != nil {
+		t.Fatal(err)
+	}
+	checkAcrossRestart(t, db, dir, o, check)
+}
+
 func TestSystemState(t *testing.T) {
 	dir := t.TempDir()
 	db := mustOpen(t, dir, testOptions())
@@ -1301,8 +1352,9 @@ func TestProposeReportsWhatTheOutcomeDependsOn(t *testing.T) {
 }
 
 func FuzzScanner(f *testing.F) {
-	valid := appendRecord(nil, 0, 0, "key", []byte("value"))
-	valid = appendRecord(valid, flagTombstone, 0, "key", nil)
+	valid := appendRecord(nil, 0, 0, "key", 0, []byte("value"))
+	valid = appendRecord(valid, flagTombstone, 0, "key", 0, nil)
+	valid = appendRecord(valid, 0, 0, "hash", 1, []byte("fields"))
 	valid = appendTxHeader(valid, 7, 2)
 	valid = appendControl(valid, flagMark, 42)
 	f.Add(valid)
@@ -1317,7 +1369,7 @@ func FuzzScanner(f *testing.F) {
 				}
 				return
 			}
-			if got := appendRecord(nil, r.flags, r.expireAt, string(r.key), r.value); !bytes.Equal(got, data[r.offset:s.offset]) {
+			if got := appendRecord(nil, r.flags, r.expireAt, string(r.key), 0, r.value); !bytes.Equal(got, data[r.offset:s.offset]) {
 				t.Fatalf("record at %d encodes to %x, the file has %x", r.offset, got, data[r.offset:s.offset])
 			}
 		}

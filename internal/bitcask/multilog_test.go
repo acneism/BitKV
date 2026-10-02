@@ -226,21 +226,26 @@ func TestFilesArePrivate(t *testing.T) {
 	}
 }
 
-func TestBitKVMetaOpens(t *testing.T) {
-	dir := t.TempDir()
-	db := mustOpen(t, dir, multiOptions(2))
-	put(t, db, "k", "v", 0)
-	mustClose(t, db)
-	if err := os.WriteFile(filepath.Join(dir, metaName), []byte(oldMetaMagic+"\nlogs 2\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+func TestOldMetaOpensAndIsUpgraded(t *testing.T) {
+	for _, magic := range []string{"bitkv-meta 1", "casketdb-meta 1"} {
+		dir := t.TempDir()
+		db := mustOpen(t, dir, multiOptions(2))
+		put(t, db, "k", "v", 0)
+		mustClose(t, db)
+		if err := os.WriteFile(filepath.Join(dir, metaName), []byte(magic+"\nlogs 2\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 
-	db = mustOpen(t, dir, multiOptions(0))
-	defer mustClose(t, db)
-	if st := db.Stats(); st.Logs != 2 {
-		t.Fatalf("logs = %d, want 2", st.Logs)
+		db = mustOpen(t, dir, multiOptions(0))
+		if st := db.Stats(); st.Logs != 2 {
+			t.Fatalf("%s: logs = %d, want 2", magic, st.Logs)
+		}
+		expect(t, db, "k", "v")
+		mustClose(t, db)
+		if logs, got, err := readMeta(dir); logs != 2 || got != metaMagic || err != nil {
+			t.Fatalf("%s: META after open = %d, %q, %v", magic, logs, got, err)
+		}
 	}
-	expect(t, db, "k", "v")
 }
 
 func TestLegacySingleLogLayoutOpens(t *testing.T) {

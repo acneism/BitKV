@@ -28,6 +28,7 @@ func Shardwise() Scope {
 type pendingOp struct {
 	value    []byte
 	expireAt int64
+	kind     Kind
 	deleted  bool
 }
 
@@ -137,6 +138,7 @@ type Op struct {
 	Key      string
 	Value    []byte
 	ExpireAt int64
+	Kind     Kind
 	Delete   bool
 }
 
@@ -201,7 +203,7 @@ func (db *DB) Apply(ops []Op, upTo uint64) error {
 			if op.Delete {
 				tx.Delete(op.Key)
 			} else {
-				tx.Put(op.Key, op.Value, op.ExpireAt)
+				tx.PutKind(op.Key, op.Kind, op.Value, op.ExpireAt)
 			}
 		}
 		if upTo == 0 {
@@ -229,12 +231,12 @@ func (db *DB) Dump(fn func(op Op) error) error {
 			if e.expired(now) {
 				continue
 			}
-			v, err := g.readEntry(s, key, e)
+			v, kind, err := g.readEntry(s, key, e)
 			if err != nil {
 				s.mu.RUnlock()
 				return err
 			}
-			ops = append(ops, Op{Key: key, Value: v, ExpireAt: e.expireAt})
+			ops = append(ops, Op{Key: key, Value: v, ExpireAt: e.expireAt, Kind: kind})
 		}
 		s.mu.RUnlock()
 		for _, op := range ops {
@@ -250,7 +252,7 @@ func (tx *Tx) ops() []Op {
 	ops := make([]Op, len(tx.order))
 	for i, key := range tx.order {
 		p := tx.pending[key]
-		ops[i] = Op{Key: key, Value: p.value, ExpireAt: p.expireAt, Delete: p.deleted}
+		ops[i] = Op{Key: key, Value: p.value, ExpireAt: p.expireAt, Kind: p.kind, Delete: p.deleted}
 	}
 	return ops
 }
@@ -271,31 +273,43 @@ func (tx *Tx) shardFor(key string) (int, *shard) {
 }
 
 func (tx *Tx) Get(key string) ([]byte, bool, error) {
+	v, kind, ok, err := tx.GetKind(key)
+	if ok && kind != 0 {
+		return nil, false, ErrWrongKind
+	}
+	return v, ok, err
+}
+
+func (tx *Tx) GetKind(key string) ([]byte, Kind, bool, error) {
 	if op, ok := tx.pending[key]; ok {
 		if op.deleted {
-			return nil, false, nil
+			return nil, 0, false, nil
 		}
-		return op.value, true, nil
+		return op.value, op.kind, true, nil
 	}
 	i, s := tx.shardFor(key)
 	if s == nil {
-		return nil, false, ErrNotLocked
+		return nil, 0, false, ErrNotLocked
 	}
+	return tx.read(i, s, key)
+}
+
+func (tx *Tx) read(i int, s *shard, key string) ([]byte, Kind, bool, error) {
 	if op, ok := tx.proposed(s, key); ok {
 		if op.gone(tx.now) {
-			return nil, false, nil
+			return nil, 0, false, nil
 		}
-		return op.value, true, nil
+		return op.value, op.kind, true, nil
 	}
 	e, ok := s.m[key]
 	if !ok || e.expired(tx.now) {
-		return nil, false, nil
+		return nil, 0, false, nil
 	}
-	v, err := tx.db.groupOfShard(i).readEntry(s, key, e)
+	v, kind, err := tx.db.groupOfShard(i).readEntry(s, key, e)
 	if err != nil {
-		return nil, false, err
+		return nil, 0, false, err
 	}
-	return v, true, nil
+	return v, kind, true, nil
 }
 
 func (tx *Tx) ExpireAt(key string) (int64, bool) {
@@ -396,7 +410,18 @@ func (tx *Tx) Len() int {
 	return n
 }
 
-func (tx *Tx) Scan(cursor uint64, count int, match func(string) bool) (uint64, []string) {
+func (tx *Tx) ofKind(i int, s *shard, key string, kind func(Kind) bool) bool {
+	if kind == nil {
+		return true
+	}
+	if op, ok := tx.pending[key]; ok {
+		return kind(op.kind)
+	}
+	_, k, ok, err := tx.read(i, s, key)
+	return ok && err == nil && kind(k)
+}
+
+func (tx *Tx) Scan(cursor uint64, count int, match func(string) bool, kind func(Kind) bool) (uint64, []string) {
 	if !tx.global() {
 		return 0, nil
 	}
@@ -416,7 +441,7 @@ func (tx *Tx) Scan(cursor uint64, count int, match func(string) bool) (uint64, [
 				} else {
 					_, visible = tx.stored(s, key)
 				}
-				if visible && (match == nil || match(key)) {
+				if visible && (match == nil || match(key)) && tx.ofKind(int(i), s, key, kind) {
 					keys = append(keys, key)
 				}
 			}
@@ -424,7 +449,7 @@ func (tx *Tx) Scan(cursor uint64, count int, match func(string) bool) (uint64, [
 				if shardIndex(key) != int(i) || tx.pending[key].deleted {
 					continue
 				}
-				if _, ok := s.m[key]; !ok && (match == nil || match(key)) {
+				if _, ok := s.m[key]; !ok && (match == nil || match(key)) && tx.ofKind(int(i), s, key, kind) {
 					keys = append(keys, key)
 				}
 			}
@@ -437,11 +462,15 @@ func (tx *Tx) Scan(cursor uint64, count int, match func(string) bool) (uint64, [
 }
 
 func (tx *Tx) Put(key string, value []byte, expireAt int64) {
+	tx.PutKind(key, 0, value, expireAt)
+}
+
+func (tx *Tx) PutKind(key string, kind Kind, value []byte, expireAt int64) {
 	if !tx.writable {
 		tx.err = ErrReadOnly
 		return
 	}
-	if uint64(len(key)) > maxFieldSize || uint64(len(value)) > maxFieldSize {
+	if uint64(len(key)) > maxFieldSize || uint64(storedSize(kind, value)) > maxFieldSize {
 		tx.err = ErrTooLarge
 		return
 	}
@@ -452,7 +481,7 @@ func (tx *Tx) Put(key string, value []byte, expireAt int64) {
 		tx.Delete(key)
 		return
 	}
-	tx.stage(key, pendingOp{value: value, expireAt: expireAt})
+	tx.stage(key, pendingOp{value: value, expireAt: expireAt, kind: kind})
 }
 
 func (tx *Tx) Delete(key string) bool {
@@ -560,7 +589,8 @@ func (gb *groupBatch) encode(tx *Tx, cross bool, txid uint64, parts uint32) {
 		size += recordSize(0, txHeaderSize)
 	}
 	for _, key := range gb.keys {
-		size += recordSize(len(key), len(tx.pending[key].value))
+		op := tx.pending[key]
+		size += recordSize(len(key), storedSize(op.kind, op.value))
 	}
 	b := &pendingBatch{buf: make([]byte, 0, size)}
 	if cross {
@@ -579,7 +609,7 @@ func (gb *groupBatch) encode(tx *Tx, cross bool, txid uint64, parts uint32) {
 			flags |= flagMore
 		}
 		gb.offsets[i] = int64(len(b.buf))
-		b.buf = appendRecord(b.buf, flags, op.expireAt, key, op.value)
+		b.buf = appendRecord(b.buf, flags, op.expireAt, key, op.kind, op.value)
 	}
 	gb.b = b
 }
@@ -595,13 +625,14 @@ func (gb *groupBatch) apply(tx *Tx) {
 			continue
 		}
 		off := b.off + gb.offsets[i]
-		s.set(key, entry{fileID: b.df.id, offset: off, valueSize: uint32(len(op.value)), expireAt: op.expireAt})
+		stored := storedSize(op.kind, op.value)
+		s.set(key, entry{fileID: b.df.id, offset: off, valueSize: uint32(stored), expireAt: op.expireAt})
 		if written {
 			continue
 		}
-		start := gb.offsets[i] + headerSize + int64(len(key))
-		end := start + int64(len(op.value))
-		s.addOverlay(key, overlayEntry{fileID: b.df.id, offset: off, value: b.buf[start:end:end]})
+		end := gb.offsets[i] + headerSize + int64(len(key)+stored)
+		start := end - int64(len(op.value))
+		s.addOverlay(key, overlayEntry{fileID: b.df.id, kind: op.kind, offset: off, value: b.buf[start:end:end]})
 		if b.df.written.Load() >= b.end() {
 			s.dropOverlay(key, b.df.id, off)
 		}

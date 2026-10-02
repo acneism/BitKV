@@ -277,16 +277,16 @@ func (g *logGroup) writeBatches(batches []*pendingBatch) error {
 	return nil
 }
 
-func (g *logGroup) readEntry(s *shard, key string, e entry) ([]byte, error) {
+func (g *logGroup) readEntry(s *shard, key string, e entry) ([]byte, Kind, error) {
 	g.filesMu.RLock()
 	defer g.filesMu.RUnlock()
 	df, ok := g.files[e.fileID]
 	if !ok {
-		return nil, fmt.Errorf("%w: log %d has no data file %d", ErrCorrupt, g.id, e.fileID)
+		return nil, 0, fmt.Errorf("%w: log %d has no data file %d", ErrCorrupt, g.id, e.fileID)
 	}
 	if e.offset+recordSize(len(key), int(e.valueSize)) > df.written.Load() {
-		if v, ok := s.getOverlay(key, e.fileID, e.offset); ok {
-			return bytes.Clone(v), nil
+		if o, ok := s.getOverlay(key, e.fileID, e.offset); ok {
+			return bytes.Clone(o.value), o.kind, nil
 		}
 	}
 	return df.read(e.offset, key, e.valueSize)

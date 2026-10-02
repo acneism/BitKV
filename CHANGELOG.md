@@ -2,6 +2,17 @@
 
 Versions are listed newest first. CasketDB was called BitKV up to and including v0.9.
 
+## Unreleased
+
+### Added
+
+- `OBJECT ENCODING` answers `int`, `embstr` or `raw` for a string, as Redis does.
+- Groundwork for data types other than strings: a record can carry the type of its value, and commands answer `WRONGTYPE` for a key of another type. No command writes such values yet. See [ADR 10](docs/adr/0010-value-types.md).
+
+### Upgrading from v0.13
+
+- Data directories open unchanged, but their `META` becomes version 2 at the first start, and v0.13 and older refuse the directory after that. Back it up first if you may need to go back.
+
 ## v0.13 — 2026-10-01
 
 ### Added

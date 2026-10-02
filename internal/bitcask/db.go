@@ -20,6 +20,7 @@ var (
 	ErrMergeInProgress = errors.New("bitcask: merge already in progress")
 	ErrReadOnly        = errors.New("bitcask: write in read-only transaction")
 	ErrTooLarge        = errors.New("bitcask: key or value too large")
+	ErrWrongKind       = errors.New("bitcask: value of another kind")
 )
 
 type Stats struct {
@@ -247,7 +248,7 @@ func (db *DB) Scan(cursor uint64, count int, match func(string) bool) (uint64, [
 	var next uint64
 	var keys []string
 	_ = db.View(Shardwise(), func(tx *Tx) error {
-		next, keys = tx.Scan(cursor, count, match)
+		next, keys = tx.Scan(cursor, count, match, nil)
 		return nil
 	})
 	return next, keys

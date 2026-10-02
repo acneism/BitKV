@@ -315,6 +315,46 @@ func TestExpiryThroughServer(t *testing.T) {
 	}
 }
 
+func TestTypes(t *testing.T) {
+	srv, db, addr := startServer(t, t.TempDir())
+	defer stopServer(t, srv, db)
+	if err := db.Update(bitcask.Keys("h"), func(tx *bitcask.Tx) error {
+		tx.PutKind("h", typeHash, []byte("fields"), 0)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c := dial(t, addr)
+	c.expect(status("OK"), "SET", "s", "v")
+	c.expect(status("hash"), "TYPE", "h")
+	c.expect(status("string"), "TYPE", "s")
+	c.expect(status("none"), "TYPE", "missing")
+	for _, cmd := range [][]string{{"GET", "h"}, {"INCR", "h"}, {"APPEND", "h", "x"}, {"STRLEN", "h"}, {"GETDEL", "h"}, {"SET", "h", "x", "GET"}} {
+		c.expect(errReply(errWrongType), cmd...)
+	}
+	c.expect([]any{"v", nil}, "MGET", "s", "h")
+	c.expect(int64(1), "EXPIRE", "h", "100")
+	c.expect(status("hash"), "TYPE", "h")
+	c.expect(int64(1), "PERSIST", "h")
+	c.expect(int64(-1), "TTL", "h")
+	c.expect([]any{"0", []any{"h"}}, "SCAN", "0", "TYPE", "HASH")
+	c.expect([]any{"0", []any{"s"}}, "SCAN", "0", "TYPE", "string")
+	c.expect([]any{"0", []any{}}, "SCAN", "0", "TYPE", "nosuch")
+	c.expect(status("OK"), "SET", "n", "123")
+	c.expect(status("OK"), "SET", "long", strings.Repeat("x", 45))
+	for key, want := range map[string]any{"s": "embstr", "n": "int", "long": "raw", "h": "listpack", "missing": nil} {
+		c.expect(want, "OBJECT", "ENCODING", key)
+	}
+	c.expect(errReply("ERR unknown subcommand"), "OBJECT", "FREQ", "s")
+	c.expect(status("OK"), "MULTI")
+	c.expect(status("QUEUED"), "GET", "h")
+	c.expect(status("QUEUED"), "SET", "s2", "x")
+	c.expect([]any{errReply(errWrongType), status("OK")}, "EXEC")
+	c.expect("x", "GET", "s2")
+	c.expect(status("OK"), "SET", "h", "plain")
+	c.expect(status("string"), "TYPE", "h")
+}
+
 func TestKeysAndScan(t *testing.T) {
 	srv, db, addr := startServer(t, t.TempDir())
 	defer stopServer(t, srv, db)

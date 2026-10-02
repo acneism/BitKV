@@ -7,7 +7,7 @@ CasketDB implements the string subset of Redis 7 over RESP2. Semantics, replies 
 | Group | Commands | Notes |
 | --- | --- | --- |
 | Strings | GET, SET, SETNX, SETEX, PSETEX, GETDEL, MGET, MSET, APPEND, STRLEN, INCR, DECR, INCRBY, DECRBY | SET accepts EX, PX, EXAT, PXAT, NX, XX, KEEPTTL, GET. MSET and INCR* are atomic |
-| Keys | DEL, UNLINK, EXISTS, TYPE, KEYS, SCAN, DBSIZE | Glob patterns `*`, `?`, `[a-z]`, `[^x]`, `\`. SCAN accepts MATCH, COUNT, TYPE |
+| Keys | DEL, UNLINK, EXISTS, TYPE, OBJECT, KEYS, SCAN, DBSIZE | Glob patterns `*`, `?`, `[a-z]`, `[^x]`, `\`. SCAN accepts MATCH, COUNT, TYPE. OBJECT supports ENCODING only: `int`, `embstr` or `raw` for a string, as in Redis |
 | Expiry | EXPIRE, PEXPIRE, EXPIREAT, PEXPIREAT, TTL, PTTL, PERSIST | NX, XX, GT, LT. A time in the past deletes the key. TTL returns −2 for a missing key and −1 for a key without expiry |
 | Transactions | MULTI, EXEC, DISCARD, WATCH, UNWATCH | See [transactions](#transactions) |
 | Connection | PING, ECHO, QUIT, AUTH, SELECT, HELLO, CLIENT | CLIENT supports ID, GETNAME, SETNAME, SETINFO |

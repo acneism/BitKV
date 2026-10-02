@@ -21,7 +21,10 @@ const (
 	flagTx        byte = 8
 	flagTxCommit  byte = 16
 	flagMark      byte = 32
+	flagTyped     byte = 64
 )
+
+type Kind byte
 
 var (
 	castagnoli = crc32.MakeTable(crc32.Castagnoli)
@@ -48,25 +51,47 @@ func recordSize(keyLen, valueLen int) int64 {
 	return int64(headerSize) + int64(keyLen) + int64(valueLen)
 }
 
-func appendRecord(dst []byte, flags byte, expireAt int64, key string, value []byte) []byte {
+func appendRecord(dst []byte, flags byte, expireAt int64, key string, kind Kind, value []byte) []byte {
 	start := len(dst)
+	size := len(value)
+	if kind != 0 {
+		flags |= flagTyped
+		size++
+	}
 	dst = append(dst, make([]byte, headerSize)...)
 	h := dst[start:]
 	h[4] = flags
 	binary.LittleEndian.PutUint64(h[5:], uint64(expireAt))
 	binary.LittleEndian.PutUint32(h[13:], uint32(len(key)))
-	binary.LittleEndian.PutUint32(h[17:], uint32(len(value)))
+	binary.LittleEndian.PutUint32(h[17:], uint32(size))
 	dst = append(dst, key...)
+	if kind != 0 {
+		dst = append(dst, byte(kind))
+	}
 	dst = append(dst, value...)
 	binary.LittleEndian.PutUint32(dst[start:], crc32.Checksum(dst[start+4:], castagnoli))
 	return dst
+}
+
+func storedSize(kind Kind, value []byte) int {
+	if kind != 0 {
+		return len(value) + 1
+	}
+	return len(value)
+}
+
+func splitStored(flags byte, stored []byte) (Kind, []byte) {
+	if flags&flagTyped == 0 || len(stored) == 0 {
+		return 0, stored
+	}
+	return Kind(stored[0]), stored[1:]
 }
 
 func appendTxHeader(dst []byte, txid uint64, parts uint32) []byte {
 	var v [txHeaderSize]byte
 	binary.LittleEndian.PutUint64(v[0:], txid)
 	binary.LittleEndian.PutUint32(v[8:], parts)
-	return appendRecord(dst, flagTx|flagMore, 0, "", v[:])
+	return appendRecord(dst, flagTx|flagMore, 0, "", 0, v[:])
 }
 
 func decodeTxHeader(r rawRecord) (uint64, uint32, bool) {
@@ -79,7 +104,7 @@ func decodeTxHeader(r rawRecord) (uint64, uint32, bool) {
 func appendControl(dst []byte, flag byte, v uint64) []byte {
 	var b [8]byte
 	binary.LittleEndian.PutUint64(b[:], v)
-	return appendRecord(dst, flag, 0, "", b[:])
+	return appendRecord(dst, flag, 0, "", 0, b[:])
 }
 
 func decodeControl(r rawRecord, flag byte) (uint64, bool) {

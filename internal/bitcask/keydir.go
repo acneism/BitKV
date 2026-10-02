@@ -133,14 +133,14 @@ func (s *shard) addOverlay(key string, o overlayEntry) {
 	s.ovMu.Unlock()
 }
 
-func (s *shard) getOverlay(key string, fileID uint32, offset int64) ([]byte, bool) {
+func (s *shard) getOverlay(key string, fileID uint32, offset int64) (overlayEntry, bool) {
 	s.ovMu.Lock()
 	o, ok := s.overlay[key]
 	s.ovMu.Unlock()
 	if !ok || o.fileID != fileID || o.offset != offset {
-		return nil, false
+		return overlayEntry{}, false
 	}
-	return o.value, true
+	return o, true
 }
 
 func (s *shard) dropOverlay(key string, fileID uint32, offset int64) {

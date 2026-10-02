@@ -9,6 +9,7 @@ const maxScratch = 8 << 20
 
 type overlayEntry struct {
 	fileID uint32
+	kind   Kind
 	offset int64
 	value  []byte
 }

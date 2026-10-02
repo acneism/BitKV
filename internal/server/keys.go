@@ -13,6 +13,7 @@ var keyCommands = map[string]command{
 	"unlink":    {arity: -2, kind: kindWrite, keys: allArgs, acl: catKeyspace | catFast, tx: cmdDel},
 	"exists":    {arity: -2, kind: kindRead, keys: allArgs, acl: catKeyspace | catFast, tx: cmdExists},
 	"type":      {arity: 2, kind: kindRead, keys: oneKey, acl: catKeyspace | catFast, tx: cmdType},
+	"object":    {arity: -2, kind: kindRead, keys: keySpec{2, 2, 1}, acl: catKeyspace, tx: cmdObject},
 	"keys":      {arity: 2, kind: kindRead, global: true, acl: catKeyspace | catDangerous, tx: cmdKeys},
 	"scan":      {arity: -2, kind: kindRead, global: true, acl: catKeyspace, tx: cmdScan},
 	"dbsize":    {arity: 1, kind: kindRead, global: true, acl: catKeyspace | catFast, tx: cmdDBSize},
@@ -45,11 +46,43 @@ func cmdExists(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	return count, nil
 }
 
+const (
+	typeString bitcask.Kind = 0
+	typeList   bitcask.Kind = 1
+	typeSet    bitcask.Kind = 2
+	typeZSet   bitcask.Kind = 3
+	typeHash   bitcask.Kind = 4
+	typeStream bitcask.Kind = 6
+)
+
+var typeNames = map[bitcask.Kind]string{typeString: "string", typeList: "list", typeSet: "set", typeZSet: "zset", typeHash: "hash", typeStream: "stream"}
+
 func cmdType(tx *bitcask.Tx, args [][]byte) (reply, error) {
-	if tx.Exists(string(args[1])) {
-		return statusReply("string"), nil
+	_, kind, found, err := tx.GetKind(string(args[1]))
+	if err != nil || !found {
+		return statusReply("none"), err
 	}
-	return statusReply("none"), nil
+	return statusReply(typeNames[kind]), nil
+}
+
+func cmdObject(tx *bitcask.Tx, args [][]byte) (reply, error) {
+	if upper(args[1]) != "ENCODING" || len(args) != 3 {
+		return unknownSubcommand(args), nil
+	}
+	value, kind, found, err := tx.GetKind(string(args[2]))
+	if err != nil || !found {
+		return nilReply, err
+	}
+	if kind != typeString {
+		return bulkReply("listpack"), nil
+	}
+	if _, ok := parseInt(value); ok {
+		return bulkReply("int"), nil
+	}
+	if len(value) <= 44 {
+		return bulkReply("embstr"), nil
+	}
+	return bulkReply("raw"), nil
 }
 
 func cmdDBSize(tx *bitcask.Tx, args [][]byte) (reply, error) {
@@ -64,7 +97,7 @@ func globMatcher(pattern string) func(string) bool {
 }
 
 func cmdKeys(tx *bitcask.Tx, args [][]byte) (reply, error) {
-	_, keys := tx.Scan(0, math.MaxInt, globMatcher(string(args[1])))
+	_, keys := tx.Scan(0, math.MaxInt, globMatcher(string(args[1])), nil)
 	return stringsReply(keys), nil
 }
 
@@ -75,7 +108,7 @@ func cmdScan(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	}
 	count := 10
 	pattern := "*"
-	onlyStrings := true
+	var ofKind func(bitcask.Kind) bool
 	for i := 2; i < len(args); i += 2 {
 		if i+1 >= len(args) {
 			return errorReply(errSyntax), nil
@@ -93,16 +126,13 @@ func cmdScan(tx *bitcask.Tx, args [][]byte) (reply, error) {
 			}
 			count = int(min(n, math.MaxInt32))
 		case "TYPE":
-			onlyStrings = strings.EqualFold(string(args[i+1]), "string")
+			name := strings.ToLower(string(args[i+1]))
+			ofKind = func(k bitcask.Kind) bool { return typeNames[k] == name }
 		default:
 			return errorReply(errSyntax), nil
 		}
 	}
-	match := globMatcher(pattern)
-	if !onlyStrings {
-		match = func(string) bool { return false }
-	}
-	next, keys := tx.Scan(cursor, count, match)
+	next, keys := tx.Scan(cursor, count, globMatcher(pattern), ofKind)
 	return arrayReply{bulkReply(strconv.FormatUint(next, 10)), stringsReply(keys)}, nil
 }
 
@@ -184,12 +214,15 @@ func expireGeneric(tx *bitcask.Tx, args [][]byte, unit string) (reply, error) {
 		tx.Delete(key)
 		return intReply(1), nil
 	}
-	value, _, err := tx.Get(key)
-	if err != nil {
-		return nil, err
+	return intReply(1), rewrite(tx, key, when)
+}
+
+func rewrite(tx *bitcask.Tx, key string, expireAt int64) error {
+	value, kind, _, err := tx.GetKind(key)
+	if err == nil {
+		tx.PutKind(key, kind, value, expireAt)
 	}
-	tx.Put(key, value, when)
-	return intReply(1), nil
+	return err
 }
 
 func cmdTTL(tx *bitcask.Tx, args [][]byte) (reply, error) {
@@ -221,10 +254,5 @@ func cmdPersist(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	if !exists || expireAt == 0 {
 		return intReply(0), nil
 	}
-	value, _, err := tx.Get(key)
-	if err != nil {
-		return nil, err
-	}
-	tx.Put(key, value, 0)
-	return intReply(1), nil
+	return intReply(1), rewrite(tx, key, 0)
 }
