@@ -36,9 +36,10 @@ const (
 	catBitmap
 	catHash
 	catSet
+	catList
 )
 
-var categoryNames = []string{"keyspace", "read", "write", "string", "fast", "slow", "admin", "dangerous", "connection", "transaction", "bitmap", "hash", "set"}
+var categoryNames = []string{"keyspace", "read", "write", "string", "fast", "slow", "admin", "dangerous", "connection", "transaction", "bitmap", "hash", "set", "list"}
 
 func (cmd command) categories() category {
 	c := cmd.acl

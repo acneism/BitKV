@@ -73,6 +73,9 @@ func cmdObject(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	if err != nil || !found {
 		return nilReply, err
 	}
+	if kind == typeList|bitcask.Table {
+		return bulkReply("quicklist"), nil
+	}
 	if kind&bitcask.Table != 0 {
 		return bulkReply("hashtable"), nil
 	}

@@ -180,10 +180,16 @@ func (c *collection) meta() []byte {
 	return binary.AppendUvarint(binary.LittleEndian.AppendUint64(nil, c.gen), uint64(c.count))
 }
 
-func (c *collection) convert() {
-	for c.gen == 0 {
-		c.gen = rand.Uint64()
+func newGen() uint64 {
+	for {
+		if gen := rand.Uint64(); gen != 0 {
+			return gen
+		}
 	}
+}
+
+func (c *collection) convert() {
+	c.gen = newGen()
 	expireAt, _ := c.tx.ExpireAt(c.key)
 	c.table = true
 	c.tx.PutKind(c.key, c.typ|bitcask.Table, c.meta(), expireAt)
