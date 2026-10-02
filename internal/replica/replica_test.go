@@ -287,6 +287,7 @@ func entry(index uint64, kind byte, ops ...bitcask.Op) raft.Entry {
 func FuzzEntry(f *testing.F) {
 	f.Add(false, encodeEntry(kindOps, []bitcask.Op{{Key: "k", Value: []byte("v"), ExpireAt: 5}, {Key: "d", Delete: true}})[1:])
 	f.Add(true, encodeEntry(kindOps, []bitcask.Op{{Key: "h", Value: []byte("fields"), Kind: 1}, {Key: "s", Value: []byte("v")}})[1:])
+	f.Add(true, encodeEntry(kindOps, []bitcask.Op{{Key: "t", Value: []byte("gen00000"), Kind: 0x84}, {Key: "t", Member: "f", IsMember: true, Value: []byte("v")}, {Key: "t", Member: "", IsMember: true, Delete: true}})[1:])
 	f.Add(false, []byte{0, 0, 0xff, 0xff, 0xff, 0xff, 0x0f})
 	f.Fuzz(func(t *testing.T, typed bool, data []byte) {
 		ops, err := decodeOps(bytes.NewReader(data), typed)
@@ -458,7 +459,8 @@ func TestApplyKeepsLogOrder(t *testing.T) {
 		entry(3, kindOps, set("a", "2"), bitcask.Op{Key: "b", Delete: true}),
 		entry(4, kindOps, set("b", "3")),
 		entry(5, kindFlush),
-		entry(6, kindOps, set("a", "4"), bitcask.Op{Key: "h", Value: []byte("fields"), Kind: 3}),
+		entry(6, kindOps, set("a", "4"), bitcask.Op{Key: "h", Value: []byte("fields"), Kind: 3},
+			bitcask.Op{Key: "t", Value: []byte("gen00000"), Kind: bitcask.Table | 4}, bitcask.Op{Key: "t", Member: "m", IsMember: true, Value: []byte("member")}),
 		{Index: 7, Term: 1, Type: raft.EntryConfChange, Data: []byte{9}},
 		entry(8, kindOps, set("b", "5"), bitcask.Op{Key: "a", Delete: true}),
 	}))
@@ -468,9 +470,12 @@ func TestApplyKeepsLogOrder(t *testing.T) {
 			t.Fatalf("%s = %q, want %q", k, got, want)
 		}
 	}
-	must(t, db.View(bitcask.Keys("h"), func(tx *bitcask.Tx) error {
+	must(t, db.View(bitcask.Keys("h", "t"), func(tx *bitcask.Tx) error {
 		if v, kind, ok, err := tx.GetKind("h"); string(v) != "fields" || kind != 3 || !ok || err != nil {
 			t.Fatalf("typed value = %q, %d, %v, %v", v, kind, ok, err)
+		}
+		if v, ok, err := tx.GetMember("t", "m"); string(v) != "member" || !ok || err != nil {
+			t.Fatalf("member = %q, %v, %v", v, ok, err)
 		}
 		return nil
 	}))

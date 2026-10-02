@@ -31,12 +31,121 @@ type shard struct {
 	ttl   int
 	live  int64
 
-	ovMu    sync.Mutex
-	overlay map[string]overlayEntry
+	ovMu      sync.Mutex
+	overlay   map[string]overlayEntry
+	ovMembers map[memberRef]overlayEntry
 
-	proposed map[string]proposedOp
+	proposed        map[string]proposedOp
+	proposedMembers map[memberRef]proposedOp
+
+	tables map[string]*table
 
 	_ [64]byte
+}
+
+type table struct {
+	gen     uint64
+	members map[string]entry
+}
+
+func (r memberRef) size(e entry) int64 {
+	n := uint64(len(r.key))
+	w := 1
+	for ; n >= 0x80; n >>= 7 {
+		w++
+	}
+	return recordSize(w+len(r.key)+8+len(r.member), int(e.valueSize))
+}
+
+func (s *shard) member(r memberRef) (entry, bool) {
+	t := s.tables[r.key]
+	if t == nil || t.gen != r.gen {
+		return entry{}, false
+	}
+	e, ok := t.members[r.member]
+	return e, ok
+}
+
+func (s *shard) setMember(r memberRef, e entry) {
+	t := s.tables[r.key]
+	if t == nil || t.gen != r.gen {
+		s.dropTable(r.key)
+		if s.tables == nil {
+			s.tables = make(map[string]*table)
+		}
+		t = &table{gen: r.gen, members: make(map[string]entry)}
+		s.tables[r.key] = t
+	}
+	if old, ok := t.members[r.member]; ok {
+		s.live -= r.size(old)
+	}
+	t.members[r.member] = e
+	s.live += r.size(e)
+}
+
+func (s *shard) removeMember(r memberRef) {
+	e, ok := s.member(r)
+	if !ok {
+		return
+	}
+	t := s.tables[r.key]
+	delete(t.members, r.member)
+	s.live -= r.size(e)
+	if len(t.members) == 0 {
+		delete(s.tables, r.key)
+	}
+}
+
+func (s *shard) dropTable(key string) {
+	t := s.tables[key]
+	if t == nil {
+		return
+	}
+	for m, e := range t.members {
+		s.live -= memberRef{key, t.gen, m}.size(e)
+	}
+	delete(s.tables, key)
+}
+
+func (s *shard) memberAt(r memberRef, fileID uint32, offset int64) bool {
+	e, ok := s.member(r)
+	return ok && e.fileID == fileID && e.offset == offset
+}
+
+func (s *shard) relocateMember(r memberRef, oldFile uint32, oldOffset int64, newFile uint32, newOffset int64) {
+	if s.memberAt(r, oldFile, oldOffset) {
+		t := s.tables[r.key]
+		e := t.members[r.member]
+		e.fileID, e.offset = newFile, newOffset
+		t.members[r.member] = e
+	}
+}
+
+func (s *shard) addMemberOverlay(r memberRef, o overlayEntry) {
+	s.ovMu.Lock()
+	if s.ovMembers == nil {
+		s.ovMembers = make(map[memberRef]overlayEntry)
+	}
+	s.ovMembers[r] = o
+	s.ovMu.Unlock()
+}
+
+func (s *shard) getMemberOverlay(r memberRef, fileID uint32, offset int64) (overlayEntry, bool) {
+	s.ovMu.Lock()
+	o, ok := s.ovMembers[r]
+	s.ovMu.Unlock()
+	if !ok || o.fileID != fileID || o.offset != offset {
+		return overlayEntry{}, false
+	}
+	return o, true
+}
+
+func (s *shard) dropMemberOverlay(r memberRef, fileID uint32, offset int64) {
+	s.ovMu.Lock()
+	if o, ok := s.ovMembers[r]; ok && o.fileID == fileID && o.offset == offset {
+		delete(s.ovMembers, r)
+	}
+	s.ovMu.Unlock()
 }
 
 type keydir struct {
@@ -76,6 +185,7 @@ func (kd *keydir) totals() (count, ttl int, live int64) {
 
 func (s *shard) reset() {
 	s.m = make(map[string]entry)
+	s.tables = nil
 	s.count, s.ttl, s.live = 0, 0, 0
 }
 
@@ -106,6 +216,7 @@ func (s *shard) remove(key string) bool {
 	}
 	delete(s.m, key)
 	s.forget(key, old)
+	s.dropTable(key)
 	return true
 }
 

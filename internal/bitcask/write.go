@@ -17,6 +17,7 @@ type overlayEntry struct {
 type overlayRef struct {
 	key    string
 	offset int64
+	member *memberRef
 }
 
 type pendingBatch struct {

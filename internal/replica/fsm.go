@@ -21,6 +21,7 @@ const (
 	kindSystem   byte = 3
 	kindTypedOps byte = 4
 	flagDelete   byte = 1
+	flagMember   byte = 2
 
 	restoreBatch = 1024
 	restoreDir   = "restore"
@@ -181,12 +182,12 @@ func (f *bitcaskFSM) Restore(src node.SnapshotSource) error {
 }
 
 func encodeEntry(kind byte, ops []bitcask.Op) []byte {
-	if kind == kindOps && slices.ContainsFunc(ops, func(op bitcask.Op) bool { return op.Kind != 0 }) {
+	if kind == kindOps && slices.ContainsFunc(ops, func(op bitcask.Op) bool { return op.Kind != 0 || op.IsMember }) {
 		kind = kindTypedOps
 	}
 	size := 1
 	for _, op := range ops {
-		size += 2 + 3*binary.MaxVarintLen64 + len(op.Key) + len(op.Value)
+		size += 2 + 4*binary.MaxVarintLen64 + len(op.Key) + len(op.Member) + len(op.Value)
 	}
 	b := append(make([]byte, 0, size), kind)
 	for _, op := range ops {
@@ -212,6 +213,9 @@ func appendOp(b []byte, op bitcask.Op, typed bool) []byte {
 	if op.Delete {
 		flags = flagDelete
 	}
+	if op.IsMember {
+		flags |= flagMember
+	}
 	b = append(b, flags)
 	if typed {
 		b = append(b, byte(op.Kind))
@@ -219,6 +223,10 @@ func appendOp(b []byte, op bitcask.Op, typed bool) []byte {
 	b = binary.AppendVarint(b, op.ExpireAt)
 	b = binary.AppendUvarint(b, uint64(len(op.Key)))
 	b = append(b, op.Key...)
+	if op.IsMember {
+		b = binary.AppendUvarint(b, uint64(len(op.Member)))
+		b = append(b, op.Member...)
+	}
 	b = binary.AppendUvarint(b, uint64(len(op.Value)))
 	return append(b, op.Value...)
 }
@@ -228,7 +236,7 @@ func readOp(r *bytes.Reader, typed bool) (bitcask.Op, error) {
 	if err != nil {
 		return bitcask.Op{}, err
 	}
-	op := bitcask.Op{Delete: flags&flagDelete != 0}
+	op := bitcask.Op{Delete: flags&flagDelete != 0, IsMember: typed && flags&flagMember != 0}
 	if typed {
 		kind, err := r.ReadByte()
 		if err != nil {
@@ -244,6 +252,13 @@ func readOp(r *bytes.Reader, typed bool) (bitcask.Op, error) {
 		return op, err
 	}
 	op.Key = string(key)
+	if op.IsMember {
+		member, err := readField(r)
+		if err != nil {
+			return op, err
+		}
+		op.Member = string(member)
+	}
 	op.Value, err = readField(r)
 	return op, err
 }

@@ -84,15 +84,17 @@ A record in a `.data` file is a 21-byte header, then the key and the value. Inte
 | Field | Bytes | Meaning |
 | --- | --- | --- |
 | crc | 4 | CRC32-C of flags…value |
-| flags | 1 | 1 tombstone, 2 batch continues, 4 FLUSH (old format only), 8 cross-log part header, 16 cross-log commit, 32 Raft index mark, 64 typed value |
+| flags | 1 | 1 tombstone, 2 batch continues, 4 FLUSH (old format only), 8 cross-log part header, 16 cross-log commit, 32 Raft index mark, 64 typed value, 128 collection member |
 | expireAt | 8 | Unix time in ms, 0 = no expiry |
 | keyLen | 4 | Key length |
 | valueLen | 4 | Value length |
 | key, value | keyLen + valueLen | Data |
 
-A batch in one log is a run of records where every record except the last has the "batch continues" flag. An index mark is a record with flag 32, an empty key and the 8-byte index as its value. A record with flag 64 holds a value that is not a string: the first byte of the value is its type, numbered as in Redis (1 list, 2 set, 3 sorted set, 4 hash, 6 stream), and the rest is the encoded collection. A string has neither the flag nor the byte. A hash is its fields in the order they were added, each as the field's length (uvarint), the field, the value's length (uvarint) and the value. See [ADR 10](adr/0010-value-types.md).
+A batch in one log is a run of records where every record except the last has the "batch continues" flag. An index mark is a record with flag 32, an empty key and the 8-byte index as its value. A record with flag 64 holds a value that is not a string: the first byte of the value is its type, numbered as in Redis (1 list, 2 set, 3 sorted set, 4 hash, 6 stream), and the rest is the encoded collection. A string has neither the flag nor the byte. A hash is its fields in the order they were added, each as the field's length (uvarint), the field, the value's length (uvarint) and the value.
 
-A record in a `.hint` file is crc (4) + expireAt (8) + offset (8) + keyLen (4) + valueLen (4) + key. Hint files let the loader build the key index without reading values; only merge writes them.
+A large collection keeps each member in a record of its own, with flag 128. Its key is the collection key's length (uvarint), the collection key, an 8-byte generation and the member; its value is the member's value. The type byte of the collection key's own record then has its high bit set, and that record's value starts with the same generation. Members whose generation differs from their key's current record are left over from an earlier collection under the key: the loader skips them and merge drops them. See [ADR 11](adr/0011-collection-members.md). See [ADR 10](adr/0010-value-types.md).
+
+A record in a `.hint` file is crc (4) + expireAt (8) + offset (8) + keyLen (4) + valueLen (4) + key; the high bit of keyLen marks a collection member. Hint files let the loader build the key index without reading values; only merge writes them.
 
 `META` is a text file: the line `casketdb-meta 2` and the line `logs N`. Version 2 allows typed records. A directory with `casketdb-meta 1`, or `bitkv-meta 1` from BitKV, opens as is and its `META` is rewritten as version 2, so older versions refuse it from then on. A directory without `META` but with `.data` files in its root is a legacy single-log database and opens as is.
 

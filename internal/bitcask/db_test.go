@@ -2,9 +2,11 @@ package bitcask
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"os"
@@ -1070,6 +1072,123 @@ func TestKinds(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkAcrossRestart(t, db, dir, o, check)
+}
+
+func tableValue(gen uint64) []byte {
+	return binary.LittleEndian.AppendUint64(nil, gen)
+}
+
+func members(t *testing.T, db *DB, key string) map[string]string {
+	t.Helper()
+	got := map[string]string{}
+	if err := db.View(Keys(key), func(tx *Tx) error {
+		return tx.Members(key, true, func(m string, v []byte) bool {
+			got[m] = string(v)
+			return true
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func TestMembers(t *testing.T) {
+	o, clk := manualOptions()
+	dir := t.TempDir()
+	db := mustOpen(t, dir, o)
+	update := func(fn func(tx *Tx)) {
+		t.Helper()
+		if err := db.Update(Keys("h", "old", "ttl", "s"), func(tx *Tx) error { fn(tx); return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	update(func(tx *Tx) {
+		tx.PutKind("h", Table|4, tableValue(7), 0)
+		tx.PutMember("h", "a", []byte("1"))
+		tx.PutMember("h", "b", []byte("2"))
+		tx.PutKind("old", Table|4, tableValue(1), 0)
+		tx.PutMember("old", "x", []byte("gone"))
+		tx.PutKind("ttl", Table|4, tableValue(3), at(clk, time.Second))
+		tx.PutMember("ttl", "y", []byte("expires"))
+		tx.PutKind("s", Table|4, tableValue(9), 0)
+		tx.PutMember("s", "q", []byte("dropped"))
+	})
+	update(func(tx *Tx) {
+		tx.PutMember("h", "a", []byte("10"))
+		if !tx.DeleteMember("h", "b") || tx.DeleteMember("h", "nope") {
+			t.Error("DeleteMember reported the wrong result")
+		}
+		tx.PutMember("h", "c", []byte("3"))
+		tx.PutKind("old", Table|4, tableValue(2), 0)
+		tx.PutMember("old", "z", []byte("new"))
+		tx.Put("s", []byte("string"), 0)
+	})
+	if err := db.Update(Keys("s"), func(tx *Tx) error {
+		tx.PutMember("s", "q", []byte("refused"))
+		return nil
+	}); !errors.Is(err, ErrNotTable) {
+		t.Fatalf("PutMember on a string = %v, want ErrNotTable", err)
+	}
+	clk.Advance(2 * time.Second)
+	want := map[string]map[string]string{"h": {"a": "10", "c": "3"}, "old": {"z": "new"}, "ttl": {}, "s": {}}
+	check := func(db *DB) {
+		t.Helper()
+		for key, w := range want {
+			if got := members(t, db, key); !maps.Equal(got, w) {
+				t.Errorf("members of %s = %v, want %v", key, got, w)
+			}
+		}
+		var dumped []Op
+		if err := db.Dump(func(op Op) error { dumped = append(dumped, op); return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.ContainsFunc(dumped, func(op Op) bool { return op.IsMember && op.Key == "h" && op.Member == "c" && string(op.Value) == "3" }) {
+			t.Errorf("Dump = %+v", dumped)
+		}
+	}
+	check(db)
+	mustClose(t, db)
+	db = mustOpen(t, dir, o)
+	check(db)
+	if err := db.Merge(); err != nil {
+		t.Fatal(err)
+	}
+	checkAcrossRestart(t, db, dir, o, check)
+}
+
+func TestProposedMembers(t *testing.T) {
+	db := mustOpen(t, t.TempDir(), testOptions())
+	defer mustClose(t, db)
+	var published []Op
+	publish := func(ops []Op) (uint64, error) {
+		published = ops
+		return 1, nil
+	}
+	if _, err := db.Propose(Keys("p"), 1, func(tx *Tx) error {
+		tx.PutKind("p", Table|4, tableValue(5), 0)
+		tx.PutMember("p", "m", []byte("v"))
+		return nil
+	}, publish); err != nil {
+		t.Fatal(err)
+	}
+	if len(published) != 2 || !published[1].IsMember || published[1].Member != "m" {
+		t.Fatalf("published %+v", published)
+	}
+	depends, err := db.Propose(Keys("p"), 1, func(tx *Tx) error {
+		if v, ok, err := tx.GetMember("p", "m"); string(v) != "v" || !ok || err != nil {
+			t.Errorf("proposed member = %q, %v, %v", v, ok, err)
+		}
+		return nil
+	}, publish)
+	if err != nil || depends != 1 {
+		t.Fatalf("depends %d, %v", depends, err)
+	}
+	if err := db.Apply(published, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := members(t, db, "p"); !maps.Equal(got, map[string]string{"m": "v"}) {
+		t.Fatalf("members after Apply = %v", got)
+	}
 }
 
 func TestSystemState(t *testing.T) {

@@ -21,6 +21,7 @@ var (
 	ErrReadOnly        = errors.New("bitcask: write in read-only transaction")
 	ErrTooLarge        = errors.New("bitcask: key or value too large")
 	ErrWrongKind       = errors.New("bitcask: value of another kind")
+	ErrNotTable        = errors.New("bitcask: key holds no member table")
 )
 
 type Stats struct {

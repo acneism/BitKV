@@ -1,6 +1,7 @@
 package bitcask
 
 import (
+	"cmp"
 	"errors"
 	"slices"
 )
@@ -61,6 +62,9 @@ type Tx struct {
 	depends   uint64
 	order     []string
 	err       error
+
+	pendingMembers map[memberRef]pendingOp
+	memberOrder    []memberRef
 }
 
 func (db *DB) begin(scope Scope, writable bool) *Tx {
@@ -140,6 +144,8 @@ type Op struct {
 	ExpireAt int64
 	Kind     Kind
 	Delete   bool
+	Member   string
+	IsMember bool
 }
 
 func (db *DB) Propose(scope Scope, term uint64, fn func(tx *Tx) error, publish func(ops []Op) (uint64, error)) (uint64, error) {
@@ -155,7 +161,8 @@ func (db *DB) Propose(scope Scope, term uint64, fn func(tx *Tx) error, publish f
 	if tx.err != nil || len(tx.order) == 0 {
 		return tx.depends, tx.err
 	}
-	id, err := publish(tx.ops())
+	ops, members := tx.ops()
+	id, err := publish(ops)
 	if err != nil {
 		return tx.depends, err
 	}
@@ -166,6 +173,13 @@ func (db *DB) Propose(scope Scope, term uint64, fn func(tx *Tx) error, publish f
 		}
 		s.proposed[key] = proposedOp{pendingOp: tx.pending[key], term: term, id: id}
 	}
+	for _, r := range members {
+		s := db.kd.shard(r.key)
+		if s.proposedMembers == nil {
+			s.proposedMembers = make(map[memberRef]proposedOp)
+		}
+		s.proposedMembers[r] = proposedOp{pendingOp: tx.pendingMembers[r], term: term, id: id}
+	}
 	return id, nil
 }
 
@@ -173,7 +187,7 @@ func (db *DB) DropProposed() {
 	for i := range db.kd.shards {
 		s := &db.kd.shards[i]
 		s.mu.Lock()
-		s.proposed = nil
+		s.proposed, s.proposedMembers = nil, nil
 		s.mu.Unlock()
 	}
 }
@@ -200,9 +214,14 @@ func (db *DB) Apply(ops []Op, upTo uint64) error {
 	}
 	_, err := db.update(Keys(keys...), func(tx *Tx) error {
 		for _, op := range ops {
-			if op.Delete {
+			switch {
+			case op.IsMember && op.Delete:
+				tx.DeleteMember(op.Key, op.Member)
+			case op.IsMember:
+				tx.PutMember(op.Key, op.Member, op.Value)
+			case op.Delete:
 				tx.Delete(op.Key)
-			} else {
+			default:
 				tx.PutKind(op.Key, op.Kind, op.Value, op.ExpireAt)
 			}
 		}
@@ -211,8 +230,19 @@ func (db *DB) Apply(ops []Op, upTo uint64) error {
 		}
 		for _, op := range ops {
 			s := db.kd.shard(op.Key)
-			if p, ok := s.proposed[op.Key]; ok && p.id <= upTo {
-				delete(s.proposed, op.Key)
+			if !op.IsMember {
+				if p, ok := s.proposed[op.Key]; ok && p.id <= upTo {
+					delete(s.proposed, op.Key)
+				}
+				continue
+			}
+			gen, _, err := tx.gen(op.Key)
+			if err != nil {
+				return err
+			}
+			r := memberRef{op.Key, gen, op.Member}
+			if p, ok := s.proposedMembers[r]; ok && p.id <= upTo {
+				delete(s.proposedMembers, r)
 			}
 		}
 		return nil
@@ -237,6 +267,19 @@ func (db *DB) Dump(fn func(op Op) error) error {
 				return err
 			}
 			ops = append(ops, Op{Key: key, Value: v, ExpireAt: e.expireAt, Kind: kind})
+			gen, ok := tableGen(kind, v)
+			if t := s.tables[key]; !ok || t == nil || t.gen != gen {
+				continue
+			}
+			for member, me := range s.tables[key].members {
+				r := memberRef{key, gen, member}
+				mv, err := g.readMember(s, r, me)
+				if err != nil {
+					s.mu.RUnlock()
+					return err
+				}
+				ops = append(ops, Op{Key: key, Member: member, IsMember: true, Value: mv})
+			}
 		}
 		s.mu.RUnlock()
 		for _, op := range ops {
@@ -248,13 +291,186 @@ func (db *DB) Dump(fn func(op Op) error) error {
 	return nil
 }
 
-func (tx *Tx) ops() []Op {
-	ops := make([]Op, len(tx.order))
+func (tx *Tx) ops() ([]Op, []memberRef) {
+	ops := make([]Op, len(tx.order), len(tx.order)+len(tx.memberOrder))
 	for i, key := range tx.order {
 		p := tx.pending[key]
 		ops[i] = Op{Key: key, Value: p.value, ExpireAt: p.expireAt, Kind: p.kind, Delete: p.deleted}
 	}
-	return ops
+	members := tx.liveMembers()
+	for _, r := range members {
+		p := tx.pendingMembers[r]
+		ops = append(ops, Op{Key: r.key, Member: r.member, IsMember: true, Value: p.value, Delete: p.deleted})
+	}
+	return ops, members
+}
+
+func (tx *Tx) liveMembers() []memberRef {
+	if len(tx.memberOrder) == 0 {
+		return nil
+	}
+	gens := make(map[string]uint64)
+	var live []memberRef
+	for _, r := range tx.memberOrder {
+		gen, ok := gens[r.key]
+		if !ok {
+			gen, _, _ = tx.gen(r.key)
+			gens[r.key] = gen
+		}
+		if gen == r.gen {
+			live = append(live, r)
+		}
+	}
+	return live
+}
+
+func (tx *Tx) gen(key string) (uint64, bool, error) {
+	v, kind, ok, err := tx.GetKind(key)
+	if err != nil || !ok {
+		return 0, false, err
+	}
+	gen, ok := tableGen(kind, v)
+	return gen, ok, nil
+}
+
+func (tx *Tx) GetMember(key, member string) ([]byte, bool, error) {
+	gen, ok, err := tx.gen(key)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	i, s := tx.shardFor(key)
+	if s == nil {
+		return nil, false, ErrNotLocked
+	}
+	return tx.readMember(i, s, memberRef{key, gen, member})
+}
+
+func (tx *Tx) lookupMember(s *shard, r memberRef) (pendingOp, entry, bool) {
+	if op, ok := tx.pendingMembers[r]; ok {
+		return op, entry{}, !op.deleted
+	}
+	if tx.term != 0 {
+		if op, ok := s.proposedMembers[r]; ok && op.term == tx.term {
+			tx.depends = max(tx.depends, op.id)
+			return op.pendingOp, entry{}, !op.deleted
+		}
+	}
+	e, ok := s.member(r)
+	return pendingOp{}, e, ok
+}
+
+func (tx *Tx) readMember(i int, s *shard, r memberRef) ([]byte, bool, error) {
+	op, e, ok := tx.lookupMember(s, r)
+	switch {
+	case !ok:
+		return nil, false, nil
+	case e == entry{}:
+		return op.value, true, nil
+	}
+	v, err := tx.db.groupOfShard(i).readMember(s, r, e)
+	return v, err == nil, err
+}
+
+func (tx *Tx) PutMember(key, member string, value []byte) {
+	if !tx.writable {
+		tx.err = ErrReadOnly
+		return
+	}
+	if uint64(len(value)) > maxFieldSize {
+		tx.err = ErrTooLarge
+		return
+	}
+	gen, ok, err := tx.gen(key)
+	switch {
+	case err != nil:
+		tx.err = err
+	case !ok:
+		tx.err = ErrNotTable
+	default:
+		tx.stageMember(memberRef{key, gen, member}, pendingOp{value: value})
+	}
+}
+
+func (tx *Tx) DeleteMember(key, member string) bool {
+	if !tx.writable {
+		tx.err = ErrReadOnly
+		return false
+	}
+	gen, ok, err := tx.gen(key)
+	if err != nil || !ok {
+		tx.err = cmp.Or(tx.err, err)
+		return false
+	}
+	_, s := tx.shardFor(key)
+	if s == nil {
+		return false
+	}
+	r := memberRef{key, gen, member}
+	if _, _, found := tx.lookupMember(s, r); !found {
+		return false
+	}
+	tx.stageMember(r, pendingOp{deleted: true})
+	return true
+}
+
+func (tx *Tx) Members(key string, values bool, fn func(member string, value []byte) bool) error {
+	gen, ok, err := tx.gen(key)
+	if err != nil || !ok {
+		return err
+	}
+	i, s := tx.shardFor(key)
+	if s == nil {
+		return ErrNotLocked
+	}
+	extra := make(map[string]bool)
+	for r := range tx.pendingMembers {
+		if r.key == key && r.gen == gen {
+			extra[r.member] = true
+		}
+	}
+	if tx.term != 0 {
+		for r, op := range s.proposedMembers {
+			if r.key == key && r.gen == gen && op.term == tx.term {
+				extra[r.member] = true
+			}
+		}
+	}
+	visit := func(member string) (bool, error) {
+		r := memberRef{key, gen, member}
+		if !values {
+			_, _, found := tx.lookupMember(s, r)
+			return !found || fn(member, nil), nil
+		}
+		v, found, err := tx.readMember(i, s, r)
+		if err != nil || !found {
+			return err == nil, err
+		}
+		return fn(member, v), nil
+	}
+	if t := s.tables[key]; t != nil && t.gen == gen {
+		for member := range t.members {
+			delete(extra, member)
+			if more, err := visit(member); err != nil || !more {
+				return err
+			}
+		}
+	}
+	for member := range extra {
+		if more, err := visit(member); err != nil || !more {
+			return err
+		}
+	}
+	return nil
+}
+
+func (tx *Tx) stageMember(r memberRef, op pendingOp) {
+	if tx.pendingMembers == nil {
+		tx.pendingMembers = make(map[memberRef]pendingOp)
+	}
+	if _, ok := tx.pendingMembers[r]; !ok {
+		tx.memberOrder = append(tx.memberOrder, r)
+	}
+	tx.pendingMembers[r] = op
 }
 
 func (tx *Tx) Now() int64 {
@@ -507,15 +723,29 @@ func (tx *Tx) stage(key string, op pendingOp) {
 }
 
 type groupBatch struct {
-	g       *logGroup
-	b       *pendingBatch
-	keys    []string
-	offsets []int64
+	g             *logGroup
+	b             *pendingBatch
+	keys          []string
+	offsets       []int64
+	members       []memberRef
+	memberKeys    []string
+	memberOffsets []int64
 }
 
 func (tx *Tx) commit() ([]waitPoint, error) {
 	db := tx.db
 	var parts []*groupBatch
+	part := func(key string) *groupBatch {
+		g := db.groupOfKey(key)
+		for _, p := range parts {
+			if p.g == g {
+				return p
+			}
+		}
+		gb := &groupBatch{g: g}
+		parts = append(parts, gb)
+		return gb
+	}
 	for _, key := range tx.order {
 		if tx.pending[key].deleted {
 			s := db.kd.shard(key)
@@ -528,19 +758,15 @@ func (tx *Tx) commit() ([]waitPoint, error) {
 				continue
 			}
 		}
-		g := db.groupOfKey(key)
-		var gb *groupBatch
-		for _, p := range parts {
-			if p.g == g {
-				gb = p
-				break
-			}
-		}
-		if gb == nil {
-			gb = &groupBatch{g: g}
-			parts = append(parts, gb)
-		}
+		gb := part(key)
 		gb.keys = append(gb.keys, key)
+	}
+	for _, r := range tx.liveMembers() {
+		if _, stored := db.kd.shard(r.key).member(r); tx.pendingMembers[r].deleted && !stored {
+			continue
+		}
+		gb := part(r.key)
+		gb.members = append(gb.members, r)
 	}
 	if len(parts) == 0 {
 		return nil, nil
@@ -592,10 +818,16 @@ func (gb *groupBatch) encode(tx *Tx, cross bool, txid uint64, parts uint32) {
 		op := tx.pending[key]
 		size += recordSize(len(key), storedSize(op.kind, op.value))
 	}
+	gb.memberKeys = make([]string, len(gb.members))
+	for j, r := range gb.members {
+		gb.memberKeys[j] = r.recordKey()
+		size += recordSize(len(gb.memberKeys[j]), len(tx.pendingMembers[r].value))
+	}
 	b := &pendingBatch{buf: make([]byte, 0, size)}
 	if cross {
 		b.buf = appendTxHeader(b.buf, txid, parts)
 	}
+	last := len(gb.keys) + len(gb.members) - 1
 	gb.offsets = make([]int64, len(gb.keys))
 	for i, key := range gb.keys {
 		op := tx.pending[key]
@@ -605,11 +837,26 @@ func (gb *groupBatch) encode(tx *Tx, cross bool, txid uint64, parts uint32) {
 		} else {
 			b.refs = append(b.refs, overlayRef{key: key, offset: int64(len(b.buf))})
 		}
-		if i < len(gb.keys)-1 {
+		if i < last {
 			flags |= flagMore
 		}
 		gb.offsets[i] = int64(len(b.buf))
 		b.buf = appendRecord(b.buf, flags, op.expireAt, key, op.kind, op.value)
+	}
+	gb.memberOffsets = make([]int64, len(gb.members))
+	for j, r := range gb.members {
+		op := tx.pendingMembers[r]
+		flags := flagMember
+		if op.deleted {
+			flags |= flagTombstone
+		} else {
+			b.refs = append(b.refs, overlayRef{key: r.key, offset: int64(len(b.buf)), member: &gb.members[j]})
+		}
+		if len(gb.keys)+j < last {
+			flags |= flagMore
+		}
+		gb.memberOffsets[j] = int64(len(b.buf))
+		b.buf = appendRecord(b.buf, flags, 0, gb.memberKeys[j], 0, op.value)
 	}
 	gb.b = b
 }
@@ -627,6 +874,9 @@ func (gb *groupBatch) apply(tx *Tx) {
 		off := b.off + gb.offsets[i]
 		stored := storedSize(op.kind, op.value)
 		s.set(key, entry{fileID: b.df.id, offset: off, valueSize: uint32(stored), expireAt: op.expireAt})
+		if gen, ok := tableGen(op.kind, op.value); !ok || (s.tables[key] != nil && s.tables[key].gen != gen) {
+			s.dropTable(key)
+		}
 		if written {
 			continue
 		}
@@ -635,6 +885,25 @@ func (gb *groupBatch) apply(tx *Tx) {
 		s.addOverlay(key, overlayEntry{fileID: b.df.id, kind: op.kind, offset: off, value: b.buf[start:end:end]})
 		if b.df.written.Load() >= b.end() {
 			s.dropOverlay(key, b.df.id, off)
+		}
+	}
+	for j, r := range gb.members {
+		s := tx.db.kd.shard(r.key)
+		op := tx.pendingMembers[r]
+		if op.deleted {
+			s.removeMember(r)
+			continue
+		}
+		off := b.off + gb.memberOffsets[j]
+		s.setMember(r, entry{fileID: b.df.id, offset: off, valueSize: uint32(len(op.value))})
+		if written {
+			continue
+		}
+		end := gb.memberOffsets[j] + headerSize + int64(len(gb.memberKeys[j])+len(op.value))
+		start := end - int64(len(op.value))
+		s.addMemberOverlay(r, overlayEntry{fileID: b.df.id, offset: off, value: b.buf[start:end:end]})
+		if b.df.written.Load() >= b.end() {
+			s.dropMemberOverlay(r, b.df.id, off)
 		}
 	}
 }

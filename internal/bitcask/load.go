@@ -20,10 +20,12 @@ type recPos struct {
 }
 
 type undoRec struct {
-	key  string
-	pos  recPos
-	prev entry
-	had  bool
+	key      string
+	pos      recPos
+	prev     entry
+	had      bool
+	member   memberRef
+	isMember bool
 }
 
 type txPart struct {
@@ -32,12 +34,14 @@ type txPart struct {
 }
 
 type loadState struct {
-	g       *logGroup
-	now     int64
-	parts   map[uint64]*txPart
-	commits map[uint64]bool
-	touched map[string]recPos
-	mark    uint64
+	g              *logGroup
+	now            int64
+	parts          map[uint64]*txPart
+	commits        map[uint64]bool
+	touched        map[string]recPos
+	mark           uint64
+	members        map[memberRef]entry
+	touchedMembers map[memberRef]recPos
 }
 
 func (db *DB) load() error {
@@ -72,6 +76,34 @@ func (db *DB) load() error {
 		}
 		st.g.mark, st.g.durable = st.mark, st.mark
 	}
+	for _, st := range states {
+		if err := st.attachMembers(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (st *loadState) attachMembers() error {
+	gens := make(map[string]uint64)
+	for r, e := range st.members {
+		s := st.g.db.kd.shard(r.key)
+		gen, known := gens[r.key]
+		if !known {
+			if main, ok := s.m[r.key]; ok {
+				v, kind, err := st.g.readEntry(s, r.key, main)
+				if err != nil {
+					return err
+				}
+				gen, _ = tableGen(kind, v)
+			}
+			gens[r.key] = gen
+		}
+		if gen != 0 && gen == r.gen {
+			s.setMember(r, e)
+		}
+	}
+	st.members, st.touchedMembers = nil, nil
 	return nil
 }
 
@@ -91,11 +123,13 @@ func (g *logGroup) writeCommits(txids []uint64) error {
 
 func (g *logGroup) load() (*loadState, error) {
 	st := &loadState{
-		g:       g,
-		now:     g.db.nowMs(),
-		parts:   make(map[uint64]*txPart),
-		commits: make(map[uint64]bool),
-		touched: make(map[string]recPos),
+		g:              g,
+		now:            g.db.nowMs(),
+		parts:          make(map[uint64]*txPart),
+		commits:        make(map[uint64]bool),
+		touched:        make(map[string]recPos),
+		members:        make(map[memberRef]entry),
+		touchedMembers: make(map[memberRef]recPos),
 	}
 	ids, err := listIDs(g.dir, dataExt)
 	if err != nil {
@@ -221,6 +255,8 @@ func (st *loadState) loadHint(df *dataFile) error {
 		expireAt := int64(binary.LittleEndian.Uint64(h[4:]))
 		offset := int64(binary.LittleEndian.Uint64(h[12:]))
 		keyLen := binary.LittleEndian.Uint32(h[20:])
+		member := keyLen&hintMemberBit != 0
+		keyLen &^= hintMemberBit
 		valueLen := binary.LittleEndian.Uint32(h[24:])
 		if offset < 0 || offset+int64(headerSize)+int64(keyLen)+int64(valueLen) > df.size {
 			return ErrCorrupt
@@ -231,6 +267,12 @@ func (st *loadState) loadHint(df *dataFile) error {
 		}
 		if crc32.Update(crc32.Checksum(h[4:], castagnoli), castagnoli, raw) != binary.LittleEndian.Uint32(h[:]) {
 			return ErrCorrupt
+		}
+		if member {
+			if r, ok := parseMemberKey(raw); ok {
+				st.members[r] = entry{fileID: df.id, offset: offset, valueSize: valueLen}
+			}
+			continue
 		}
 		key := string(raw)
 		if _, ok := st.touched[key]; ok {
@@ -251,10 +293,30 @@ func (st *loadState) apply(fileID uint32, r rawRecord) bool {
 		for i := st.g.id; i < numShards; i += groups {
 			st.g.db.kd.shards[i].reset()
 		}
+		clear(st.members)
 		return true
 	}
-	st.put(fileID, r)
+	if r.flags&flagMember != 0 {
+		st.putMember(fileID, r)
+	} else {
+		st.put(fileID, r)
+	}
 	return false
+}
+
+func (st *loadState) putMember(fileID uint32, r rawRecord) {
+	ref, ok := parseMemberKey(r.key)
+	if !ok {
+		return
+	}
+	if _, ok := st.touchedMembers[ref]; ok {
+		st.touchedMembers[ref] = recPos{fileID, r.offset}
+	}
+	if r.flags&flagTombstone != 0 {
+		delete(st.members, ref)
+		return
+	}
+	st.members[ref] = entry{fileID: fileID, offset: r.offset, valueSize: uint32(len(r.value))}
 }
 
 func (st *loadState) put(fileID uint32, r rawRecord) {
@@ -277,8 +339,19 @@ func (st *loadState) applyPart(fileID uint32, txid uint64, parts uint32, recs []
 		st.parts[txid] = p
 	}
 	for _, r := range recs {
-		key := string(r.key)
 		pos := recPos{fileID, r.offset}
+		if r.flags&flagMember != 0 {
+			ref, ok := parseMemberKey(r.key)
+			if !ok {
+				continue
+			}
+			prev, had := st.members[ref]
+			st.touchedMembers[ref] = pos
+			st.putMember(fileID, r)
+			p.undo = append(p.undo, undoRec{pos: pos, prev: prev, had: had, member: ref, isMember: true})
+			continue
+		}
+		key := string(r.key)
 		prev, had := st.g.db.kd.shard(key).m[key]
 		st.touched[key] = pos
 		st.put(fileID, r)
@@ -289,6 +362,16 @@ func (st *loadState) applyPart(fileID uint32, txid uint64, parts uint32, recs []
 func (st *loadState) rollback(p *txPart) {
 	for i := len(p.undo) - 1; i >= 0; i-- {
 		u := p.undo[i]
+		if u.isMember {
+			switch {
+			case st.touchedMembers[u.member] != u.pos:
+			case u.had:
+				st.members[u.member] = u.prev
+			default:
+				delete(st.members, u.member)
+			}
+			continue
+		}
 		if st.touched[u.key] != u.pos {
 			continue
 		}

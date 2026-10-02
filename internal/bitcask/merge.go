@@ -15,6 +15,8 @@ type relocation struct {
 	oldOffset int64
 	newFile   uint32
 	newOffset int64
+	member    memberRef
+	isMember  bool
 }
 
 type mergeResult struct {
@@ -108,6 +110,25 @@ func (g *logGroup) writeMerge(dir string, inputs []*dataFile, boundary, reserve 
 			if rec.flags&(flagTombstone|flagFlush|flagTx|flagTxCommit|flagMark) != 0 {
 				continue
 			}
+			if rec.flags&flagMember != 0 {
+				r, ok := parseMemberKey(rec.key)
+				if !ok {
+					continue
+				}
+				s := &g.db.kd.shards[shardIndex(r.key)]
+				s.mu.RLock()
+				live := s.memberAt(r, df.id, rec.offset)
+				s.mu.RUnlock()
+				if !live {
+					continue
+				}
+				id, off, err := w.write(string(rec.key), 0, rec.value, 0, true)
+				if err != nil {
+					return nil, err
+				}
+				res.moved = append(res.moved, relocation{key: r.key, oldFile: df.id, oldOffset: rec.offset, newFile: id, newOffset: off, member: r, isMember: true})
+				continue
+			}
 			s := &g.db.kd.shards[shardIndex(rec.key)]
 			s.mu.RLock()
 			e, ok := s.m[string(rec.key)]
@@ -121,7 +142,7 @@ func (g *logGroup) writeMerge(dir string, inputs []*dataFile, boundary, reserve 
 				continue
 			}
 			kind, value := splitStored(rec.flags, rec.value)
-			id, off, err := w.write(key, kind, value, e.expireAt)
+			id, off, err := w.write(key, kind, value, e.expireAt, false)
 			if err != nil {
 				return nil, err
 			}
@@ -171,7 +192,11 @@ func (g *logGroup) finishMerge(mergeDir string, boundary uint32, res *mergeResul
 	for _, m := range res.moved {
 		s := g.db.kd.shard(m.key)
 		s.mu.Lock()
-		s.relocate(m.key, m.oldFile, m.oldOffset, m.newFile, m.newOffset)
+		if m.isMember {
+			s.relocateMember(m.member, m.oldFile, m.oldOffset, m.newFile, m.newOffset)
+		} else {
+			s.relocate(m.key, m.oldFile, m.oldOffset, m.newFile, m.newOffset)
+		}
 		s.mu.Unlock()
 	}
 	for _, m := range res.expired {
@@ -220,7 +245,7 @@ type mergeWriter struct {
 	ids     []uint32
 }
 
-func (w *mergeWriter) write(key string, kind Kind, value []byte, expireAt int64) (uint32, int64, error) {
+func (w *mergeWriter) write(key string, kind Kind, value []byte, expireAt int64, member bool) (uint32, int64, error) {
 	stored := storedSize(kind, value)
 	n := recordSize(len(key), stored)
 	if w.data == nil || (w.size > 0 && w.size+n > w.maxSize && w.nextID <= w.lastID) {
@@ -229,11 +254,15 @@ func (w *mergeWriter) write(key string, kind Kind, value []byte, expireAt int64)
 		}
 	}
 	off := w.size
-	w.buf = appendRecord(w.buf[:0], 0, expireAt, key, kind, value)
+	var flags byte
+	if member {
+		flags = flagMember
+	}
+	w.buf = appendRecord(w.buf[:0], flags, expireAt, key, kind, value)
 	if _, err := w.dw.Write(w.buf); err != nil {
 		return 0, 0, err
 	}
-	w.buf = appendHint(w.buf[:0], expireAt, off, key, uint32(stored))
+	w.buf = appendHint(w.buf[:0], expireAt, off, key, uint32(stored), member)
 	if _, err := w.hw.Write(w.buf); err != nil {
 		return 0, 0, err
 	}

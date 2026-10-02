@@ -271,10 +271,31 @@ func (g *logGroup) writeBatches(batches []*pendingBatch) error {
 	}
 	for _, b := range batches {
 		for _, r := range b.refs {
-			g.db.kd.shard(r.key).dropOverlay(r.key, b.df.id, b.off+r.offset)
+			if r.member != nil {
+				g.db.kd.shard(r.key).dropMemberOverlay(*r.member, b.df.id, b.off+r.offset)
+			} else {
+				g.db.kd.shard(r.key).dropOverlay(r.key, b.df.id, b.off+r.offset)
+			}
 		}
 	}
 	return nil
+}
+
+func (g *logGroup) readMember(s *shard, r memberRef, e entry) ([]byte, error) {
+	g.filesMu.RLock()
+	defer g.filesMu.RUnlock()
+	df, ok := g.files[e.fileID]
+	if !ok {
+		return nil, fmt.Errorf("%w: log %d has no data file %d", ErrCorrupt, g.id, e.fileID)
+	}
+	key := r.recordKey()
+	if e.offset+recordSize(len(key), int(e.valueSize)) > df.written.Load() {
+		if o, ok := s.getMemberOverlay(r, e.fileID, e.offset); ok {
+			return bytes.Clone(o.value), nil
+		}
+	}
+	v, _, err := df.read(e.offset, key, e.valueSize)
+	return v, err
 }
 
 func (g *logGroup) readEntry(s *shard, key string, e entry) ([]byte, Kind, error) {

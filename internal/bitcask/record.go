@@ -22,9 +22,43 @@ const (
 	flagTxCommit  byte = 16
 	flagMark      byte = 32
 	flagTyped     byte = 64
+	flagMember    byte = 128
+
+	hintMemberBit = 1 << 31
 )
 
 type Kind byte
+
+const Table Kind = 0x80
+
+type memberRef struct {
+	key    string
+	gen    uint64
+	member string
+}
+
+func (r memberRef) recordKey() string {
+	b := binary.AppendUvarint(make([]byte, 0, binary.MaxVarintLen64+len(r.key)+8+len(r.member)), uint64(len(r.key)))
+	b = append(b, r.key...)
+	b = binary.LittleEndian.AppendUint64(b, r.gen)
+	return string(append(b, r.member...))
+}
+
+func parseMemberKey(k []byte) (memberRef, bool) {
+	n, w := binary.Uvarint(k)
+	if w <= 0 || n > uint64(len(k)-w) || len(k)-w-int(n) < 8 {
+		return memberRef{}, false
+	}
+	rest := k[w+int(n):]
+	return memberRef{key: string(k[w : w+int(n)]), gen: binary.LittleEndian.Uint64(rest), member: string(rest[8:])}, true
+}
+
+func tableGen(kind Kind, value []byte) (uint64, bool) {
+	if kind&Table == 0 || len(value) < 8 {
+		return 0, false
+	}
+	return binary.LittleEndian.Uint64(value), true
+}
 
 var (
 	castagnoli = crc32.MakeTable(crc32.Castagnoli)
@@ -124,13 +158,17 @@ func decodeHeader(b []byte) header {
 	}
 }
 
-func appendHint(dst []byte, expireAt, offset int64, key string, valueLen uint32) []byte {
+func appendHint(dst []byte, expireAt, offset int64, key string, valueLen uint32, member bool) []byte {
 	start := len(dst)
 	dst = append(dst, make([]byte, hintHeaderSize)...)
 	h := dst[start:]
+	keyLen := uint32(len(key))
+	if member {
+		keyLen |= hintMemberBit
+	}
 	binary.LittleEndian.PutUint64(h[4:], uint64(expireAt))
 	binary.LittleEndian.PutUint64(h[12:], uint64(offset))
-	binary.LittleEndian.PutUint32(h[20:], uint32(len(key)))
+	binary.LittleEndian.PutUint32(h[20:], keyLen)
 	binary.LittleEndian.PutUint32(h[24:], valueLen)
 	dst = append(dst, key...)
 	binary.LittleEndian.PutUint32(dst[start:], crc32.Checksum(dst[start+4:], castagnoli))
