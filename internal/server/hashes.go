@@ -29,7 +29,11 @@ var hashCommands = map[string]command{
 	"hrandfield":   {arity: -2, kind: kindRead, keys: oneKey, acl: catHash, tx: cmdHRandField},
 }
 
-const maxRandomCount = 1 << 24
+const (
+	maxRandomCount  = 1 << 24
+	maxListpackLen  = 128
+	maxListpackItem = 64
+)
 
 type hash []byte
 
@@ -76,11 +80,6 @@ func (h hash) find(field []byte) (start, end int, value []byte, ok bool) {
 	}
 }
 
-func (h hash) get(field []byte) ([]byte, bool) {
-	_, _, value, ok := h.find(field)
-	return value, ok
-}
-
 func (h hash) put(field, value []byte) (hash, bool) {
 	start, end, _, found := h.find(field)
 	out := make(hash, 0, len(h)-(end-start)+2*binary.MaxVarintLen64+len(field)+len(value))
@@ -100,43 +99,147 @@ func (h hash) del(field []byte) (hash, bool) {
 	return append(append(make(hash, 0, len(h)-(end-start)), h[:start]...), h[end:]...), true
 }
 
-func getHash(tx *bitcask.Tx, key string) (hash, reply, error) {
-	value, kind, found, err := tx.GetKind(key)
+type hashView struct {
+	tx    *bitcask.Tx
+	key   string
+	blob  hash
+	table bool
+	gen   uint64
+	count int
+	dirty bool
+}
+
+func openHash(tx *bitcask.Tx, key []byte) (*hashView, reply, error) {
+	value, kind, found, err := tx.GetKind(string(key))
 	if err != nil {
 		return nil, nil, err
 	}
-	if found && kind != typeHash {
+	h := &hashView{tx: tx, key: string(key)}
+	switch {
+	case !found:
+	case kind == typeHash:
+		h.blob = value
+	case kind == typeHash|bitcask.Table && len(value) >= 8:
+		n, _ := binary.Uvarint(value[8:])
+		h.table, h.gen, h.count = true, binary.LittleEndian.Uint64(value), int(n)
+	default:
 		return nil, errorReply(errWrongType), nil
 	}
-	return value, nil, nil
+	return h, nil, nil
 }
 
-func putHash(tx *bitcask.Tx, key string, h hash) {
-	if len(h) == 0 {
-		tx.Delete(key)
+func (h *hashView) len() int {
+	if h.table {
+		return h.count
+	}
+	return h.blob.len()
+}
+
+func (h *hashView) get(field []byte) ([]byte, bool, error) {
+	if h.table {
+		return h.tx.GetMember(h.key, string(field))
+	}
+	_, _, value, ok := h.blob.find(field)
+	return value, ok, nil
+}
+
+func (h *hashView) set(field, value []byte) (bool, error) {
+	h.dirty = true
+	if !h.table {
+		var added bool
+		h.blob, added = h.blob.put(field, value)
+		if len(field) > maxListpackItem || len(value) > maxListpackItem || (added && h.blob.len() > maxListpackLen) {
+			h.convert()
+		}
+		return added, nil
+	}
+	_, found, err := h.tx.GetMember(h.key, string(field))
+	if err != nil {
+		return false, err
+	}
+	h.tx.PutMember(h.key, string(field), value)
+	if !found {
+		h.count++
+	}
+	return !found, nil
+}
+
+func (h *hashView) del(field []byte) bool {
+	var deleted bool
+	if h.table {
+		if deleted = h.tx.DeleteMember(h.key, string(field)); deleted {
+			h.count--
+		}
+	} else {
+		h.blob, deleted = h.blob.del(field)
+	}
+	h.dirty = h.dirty || deleted
+	return deleted
+}
+
+func (h *hashView) each(values bool, fn func(field, value []byte)) error {
+	if h.table {
+		return h.tx.Members(h.key, values, func(field string, value []byte) bool {
+			fn([]byte(field), value)
+			return true
+		})
+	}
+	h.blob.each(fn)
+	return nil
+}
+
+func (h *hashView) meta() []byte {
+	return binary.AppendUvarint(binary.LittleEndian.AppendUint64(nil, h.gen), uint64(h.count))
+}
+
+func (h *hashView) convert() {
+	for h.gen == 0 {
+		h.gen = rand.Uint64()
+	}
+	expireAt, _ := h.tx.ExpireAt(h.key)
+	h.table = true
+	h.tx.PutKind(h.key, typeHash|bitcask.Table, h.meta(), expireAt)
+	h.blob.each(func(field, value []byte) {
+		h.tx.PutMember(h.key, string(field), value)
+		h.count++
+	})
+	h.blob = nil
+}
+
+func (h *hashView) store() {
+	if !h.dirty {
 		return
 	}
-	expireAt, _ := tx.ExpireAt(key)
-	tx.PutKind(key, typeHash, h, expireAt)
+	expireAt, _ := h.tx.ExpireAt(h.key)
+	switch {
+	case h.len() == 0:
+		h.tx.Delete(h.key)
+	case h.table:
+		h.tx.PutKind(h.key, typeHash|bitcask.Table, h.meta(), expireAt)
+	default:
+		h.tx.PutKind(h.key, typeHash, h.blob, expireAt)
+	}
 }
 
 func hset(tx *bitcask.Tx, args [][]byte, name string) (int, reply, error) {
 	if len(args)%2 == 1 {
 		return 0, errorReply("ERR wrong number of arguments for '" + name + "' command"), nil
 	}
-	key := string(args[1])
-	h, bad, err := getHash(tx, key)
+	h, bad, err := openHash(tx, args[1])
 	if bad != nil || err != nil {
 		return 0, bad, err
 	}
 	added := 0
 	for i := 2; i < len(args); i += 2 {
-		var isNew bool
-		if h, isNew = h.put(args[i], args[i+1]); isNew {
+		isNew, err := h.set(args[i], args[i+1])
+		if err != nil {
+			return 0, nil, err
+		}
+		if isNew {
 			added++
 		}
 	}
-	putHash(tx, key, h)
+	h.store()
 	return added, nil, nil
 }
 
@@ -157,39 +260,45 @@ func cmdHMSet(tx *bitcask.Tx, args [][]byte) (reply, error) {
 }
 
 func cmdHSetNX(tx *bitcask.Tx, args [][]byte) (reply, error) {
-	key := string(args[1])
-	h, bad, err := getHash(tx, key)
+	h, bad, err := openHash(tx, args[1])
 	if bad != nil || err != nil {
 		return bad, err
 	}
-	if _, ok := h.get(args[2]); ok {
-		return intReply(0), nil
+	if _, found, err := h.get(args[2]); err != nil || found {
+		return intReply(0), err
 	}
-	h, _ = h.put(args[2], args[3])
-	putHash(tx, key, h)
+	if _, err := h.set(args[2], args[3]); err != nil {
+		return nil, err
+	}
+	h.store()
 	return intReply(1), nil
 }
 
 func cmdHGet(tx *bitcask.Tx, args [][]byte) (reply, error) {
-	h, bad, err := getHash(tx, string(args[1]))
+	h, bad, err := openHash(tx, args[1])
 	if bad != nil || err != nil {
 		return bad, err
 	}
-	if value, ok := h.get(args[2]); ok {
-		return bulkReply(value), nil
+	value, found, err := h.get(args[2])
+	if err != nil || !found {
+		return nilReply, err
 	}
-	return nilReply, nil
+	return bulkReply(value), nil
 }
 
 func cmdHMGet(tx *bitcask.Tx, args [][]byte) (reply, error) {
-	h, bad, err := getHash(tx, string(args[1]))
+	h, bad, err := openHash(tx, args[1])
 	if bad != nil || err != nil {
 		return bad, err
 	}
 	out := make(arrayReply, len(args)-2)
 	for i, field := range args[2:] {
+		value, found, err := h.get(field)
+		if err != nil {
+			return nil, err
+		}
 		out[i] = nilReply
-		if value, ok := h.get(field); ok {
+		if found {
 			out[i] = bulkReply(value)
 		}
 	}
@@ -197,26 +306,22 @@ func cmdHMGet(tx *bitcask.Tx, args [][]byte) (reply, error) {
 }
 
 func cmdHDel(tx *bitcask.Tx, args [][]byte) (reply, error) {
-	key := string(args[1])
-	h, bad, err := getHash(tx, key)
+	h, bad, err := openHash(tx, args[1])
 	if bad != nil || err != nil {
 		return bad, err
 	}
 	deleted := 0
 	for _, field := range args[2:] {
-		var ok bool
-		if h, ok = h.del(field); ok {
+		if h.del(field) {
 			deleted++
 		}
 	}
-	if deleted > 0 {
-		putHash(tx, key, h)
-	}
+	h.store()
 	return intReply(deleted), nil
 }
 
 func cmdHLen(tx *bitcask.Tx, args [][]byte) (reply, error) {
-	h, bad, err := getHash(tx, string(args[1]))
+	h, bad, err := openHash(tx, args[1])
 	if bad != nil || err != nil {
 		return bad, err
 	}
@@ -224,32 +329,33 @@ func cmdHLen(tx *bitcask.Tx, args [][]byte) (reply, error) {
 }
 
 func cmdHExists(tx *bitcask.Tx, args [][]byte) (reply, error) {
-	h, bad, err := getHash(tx, string(args[1]))
+	h, bad, err := openHash(tx, args[1])
 	if bad != nil || err != nil {
 		return bad, err
 	}
-	if _, ok := h.get(args[2]); ok {
-		return intReply(1), nil
+	_, found, err := h.get(args[2])
+	if err != nil || !found {
+		return intReply(0), err
 	}
-	return intReply(0), nil
+	return intReply(1), nil
 }
 
 func cmdHStrlen(tx *bitcask.Tx, args [][]byte) (reply, error) {
-	h, bad, err := getHash(tx, string(args[1]))
+	h, bad, err := openHash(tx, args[1])
 	if bad != nil || err != nil {
 		return bad, err
 	}
-	value, _ := h.get(args[2])
-	return intReply(len(value)), nil
+	value, _, err := h.get(args[2])
+	return intReply(len(value)), err
 }
 
 func hashItems(tx *bitcask.Tx, key []byte, fields, values bool) (reply, error) {
-	h, bad, err := getHash(tx, string(key))
+	h, bad, err := openHash(tx, key)
 	if bad != nil || err != nil {
 		return bad, err
 	}
 	out := arrayReply{}
-	h.each(func(field, value []byte) {
+	err = h.each(values, func(field, value []byte) {
 		if fields {
 			out = append(out, bulkReply(field))
 		}
@@ -257,7 +363,7 @@ func hashItems(tx *bitcask.Tx, key []byte, fields, values bool) (reply, error) {
 			out = append(out, bulkReply(value))
 		}
 	})
-	return out, nil
+	return out, err
 }
 
 func cmdHGetAll(tx *bitcask.Tx, args [][]byte) (reply, error) {
@@ -277,13 +383,16 @@ func cmdHIncrBy(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	if !ok {
 		return errorReply(errNotInteger), nil
 	}
-	key := string(args[1])
-	h, bad, err := getHash(tx, key)
+	h, bad, err := openHash(tx, args[1])
 	if bad != nil || err != nil {
 		return bad, err
 	}
+	value, found, err := h.get(args[2])
+	if err != nil {
+		return nil, err
+	}
 	var current int64
-	if value, found := h.get(args[2]); found {
+	if found {
 		if current, ok = parseInt(value); !ok {
 			return errorReply("ERR hash value is not an integer"), nil
 		}
@@ -291,8 +400,10 @@ func cmdHIncrBy(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	if (incr > 0 && current > math.MaxInt64-incr) || (incr < 0 && current < math.MinInt64-incr) {
 		return errorReply(errOverflow), nil
 	}
-	h, _ = h.put(args[2], strconv.AppendInt(nil, current+incr, 10))
-	putHash(tx, key, h)
+	if _, err := h.set(args[2], strconv.AppendInt(nil, current+incr, 10)); err != nil {
+		return nil, err
+	}
+	h.store()
 	return intReply(current + incr), nil
 }
 
@@ -304,13 +415,16 @@ func cmdHIncrByFloat(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	if math.IsInf(incr, 0) {
 		return errorReply("ERR value is NaN or Infinity"), nil
 	}
-	key := string(args[1])
-	h, bad, err := getHash(tx, key)
+	h, bad, err := openHash(tx, args[1])
 	if bad != nil || err != nil {
 		return bad, err
 	}
+	value, found, err := h.get(args[2])
+	if err != nil {
+		return nil, err
+	}
 	var current float64
-	if value, found := h.get(args[2]); found {
+	if found {
 		if current, ok = parseFloat(value); !ok {
 			return errorReply("ERR hash value is not a float"), nil
 		}
@@ -323,8 +437,10 @@ func cmdHIncrByFloat(tx *bitcask.Tx, args [][]byte) (reply, error) {
 		result = 0
 	}
 	out := strconv.AppendFloat(nil, result, 'f', -1, 64)
-	h, _ = h.put(args[2], out)
-	putHash(tx, key, h)
+	if _, err := h.set(args[2], out); err != nil {
+		return nil, err
+	}
+	h.store()
 	return bulkReply(out), nil
 }
 
@@ -353,12 +469,12 @@ func cmdHScan(tx *bitcask.Tx, args [][]byte) (reply, error) {
 			return errorReply(errSyntax), nil
 		}
 	}
-	h, bad, err := getHash(tx, string(args[1]))
+	h, bad, err := openHash(tx, args[1])
 	if bad != nil || err != nil {
 		return bad, err
 	}
 	items := arrayReply{}
-	h.each(func(field, value []byte) {
+	err = h.each(values, func(field, value []byte) {
 		if !match(field) {
 			return
 		}
@@ -367,7 +483,7 @@ func cmdHScan(tx *bitcask.Tx, args [][]byte) (reply, error) {
 			items = append(items, bulkReply(value))
 		}
 	})
-	return arrayReply{bulkReply("0"), items}, nil
+	return arrayReply{bulkReply("0"), items}, err
 }
 
 func cmdHRandField(tx *bitcask.Tx, args [][]byte) (reply, error) {
@@ -384,14 +500,16 @@ func cmdHRandField(tx *bitcask.Tx, args [][]byte) (reply, error) {
 			return errorReply("ERR value is out of range"), nil
 		}
 	}
-	h, bad, err := getHash(tx, string(args[1]))
+	h, bad, err := openHash(tx, args[1])
 	if bad != nil || err != nil {
 		return bad, err
 	}
 	var fields, values [][]byte
-	h.each(func(field, value []byte) {
+	if err := h.each(len(args) == 4, func(field, value []byte) {
 		fields, values = append(fields, field), append(values, value)
-	})
+	}); err != nil {
+		return nil, err
+	}
 	if len(args) == 2 {
 		if len(fields) == 0 {
 			return nilReply, nil

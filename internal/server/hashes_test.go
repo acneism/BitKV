@@ -5,6 +5,7 @@ import (
 	"maps"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -85,8 +86,8 @@ func TestHashModel(t *testing.T) {
 	c := dial(t, addr)
 	model := map[string]string{}
 	rng := rand.New(rand.NewPCG(1, 2))
-	for i := range 2000 {
-		field := fmt.Sprintf("f%d", rng.IntN(8))
+	for i := range 4000 {
+		field := fmt.Sprintf("f%d", rng.IntN(200))
 		switch rng.IntN(4) {
 		case 0, 1:
 			value := fmt.Sprint(rng.IntN(1000))
@@ -109,4 +110,74 @@ func TestHashModel(t *testing.T) {
 			c.expect(int64(len(model)), "HLEN", "m")
 		}
 	}
+}
+
+func TestHashTable(t *testing.T) {
+	dir := t.TempDir()
+	srv, db, addr := startServer(t, dir)
+	c := dial(t, addr)
+	args := []string{"HSET", "big"}
+	for i := range 200 {
+		args = append(args, fmt.Sprintf("f%d", i), fmt.Sprint(i))
+	}
+	c.expect(int64(200), args...)
+	c.expect("hashtable", "OBJECT", "ENCODING", "big")
+	c.expect(status("hash"), "TYPE", "big")
+	c.expect(int64(200), "HLEN", "big")
+	c.expect("150", "HGET", "big", "f150")
+	c.expect([]any{"1", nil}, "HMGET", "big", "f1", "nope")
+	c.expect(int64(151), "HINCRBY", "big", "f150", "1")
+	c.expect(int64(2), "HDEL", "big", "f0", "f1", "nope")
+	c.expect(int64(198), "HLEN", "big")
+	c.expect(int64(0), "HEXISTS", "big", "f0")
+	c.expect(int64(3), "HSTRLEN", "big", "f150")
+	if got, _ := c.do("HGETALL", "big").([]any); len(got) != 396 {
+		t.Fatalf("HGETALL big returned %d items, want 396", len(got))
+	}
+	c.expect([]any{"0", []any{"f199", "199"}}, "HSCAN", "big", "0", "MATCH", "f199")
+	if got, _ := c.do("HRANDFIELD", "big", "5").([]any); len(got) != 5 {
+		t.Fatalf("HRANDFIELD big 5 = %#v", got)
+	}
+	c.expect(int64(1), "HSET", "long", "f", strings.Repeat("x", 65))
+	c.expect("hashtable", "OBJECT", "ENCODING", "long")
+	c.expect(int64(1), "EXPIRE", "big", "100")
+	c.expect(int64(1), "HSET", "big", "new", "v")
+	c.expect(int64(100), "TTL", "big")
+	if got, _ := c.do("SCAN", "0", "TYPE", "hash", "COUNT", "1000").([]any); len(got) != 2 || !slices.Contains(got[1].([]any), any("big")) {
+		t.Fatalf("SCAN TYPE hash = %#v", got)
+	}
+	c.expect(status("OK"), "MULTI")
+	c.expect(status("QUEUED"), "DEL", "long")
+	c.expect(status("QUEUED"), "HSET", "long", "x", "1")
+	c.expect([]any{int64(1), int64(1)}, "EXEC")
+	c.expect([]any{"x", "1"}, "HGETALL", "long")
+	c.expect("listpack", "OBJECT", "ENCODING", "long")
+
+	check := func() {
+		t.Helper()
+		c := dial(t, addr)
+		c.expect(int64(199), "HLEN", "big")
+		c.expect("151", "HGET", "big", "f150")
+		c.expect(nil, "HGET", "big", "f0")
+		if got, _ := c.do("HGETALL", "big").([]any); len(got) != 398 {
+			t.Fatalf("HGETALL big returned %d items, want 398", len(got))
+		}
+		c.expect([]any{"x", "1"}, "HGETALL", "long")
+	}
+	check()
+	stopServer(t, srv, db)
+	srv, db, addr = startServer(t, dir)
+	check()
+	if err := db.Merge(); err != nil {
+		t.Fatal(err)
+	}
+	stopServer(t, srv, db)
+	srv, db, addr = startServer(t, dir)
+	defer stopServer(t, srv, db)
+	check()
+	c = dial(t, addr)
+	c.expect(int64(1), "DEL", "big")
+	c.expect(int64(1), "HSET", "big", "a", "1")
+	c.expect([]any{"a", "1"}, "HGETALL", "big")
+	c.expect("listpack", "OBJECT", "ENCODING", "big")
 }

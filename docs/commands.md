@@ -25,10 +25,15 @@ Strings, including the bitmap commands, and hashes. Lists, sets, sorted sets, st
 
 ### Hashes
 
-A hash is stored as one value, its fields in the order they were added, like a small hash in Redis, and `OBJECT ENCODING` answers `listpack` for it. Every change rewrites the whole hash, in the data file and in the Raft log, so a hash of many thousands of fields is slow to change; see [limitations](limitations.md). Because of that:
+A hash has two encodings, with the thresholds of Redis:
 
-- HSCAN returns every matching field in one reply with cursor `0`, as Redis does for a small hash, and accepts `NOVALUES`. COUNT is checked but does not split the reply.
-- HRANDFIELD with a count accepts at most 16,777,216 fields either way; Redis has no such limit.
+- Up to 128 fields, none of them and none of their values longer than 64 bytes, the hash is one value, its fields in the order they were added. `OBJECT ENCODING` answers `listpack`. A change rewrites the whole hash.
+- Beyond that, each field is a record of its own, and a change writes only the fields it touches plus a small record with the field count. `OBJECT ENCODING` answers `hashtable`. Like Redis, a hash never goes back to `listpack`, even when it shrinks.
+
+Differences from Redis:
+
+- HSCAN returns every matching field in one reply with cursor `0`, for both encodings, and accepts `NOVALUES`. COUNT is checked but does not split the reply.
+- HRANDFIELD reads every field of the hash, and with a count accepts at most 16,777,216 fields either way; Redis has no such limit.
 - Field expiry (HEXPIRE and the other commands of Redis 7.4) is not supported. `TYPE` returns `string` or `none`.
 
 ### Numbers and string sizes

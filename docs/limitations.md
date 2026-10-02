@@ -17,7 +17,8 @@ These are deliberate choices, not missing features:
 | Limitation | Possible fix |
 | --- | --- |
 | All keys must fit in RAM: about 80–100 bytes plus the key length per key | Inherent to Bitcask; a disk-based index would be a different engine |
-| A hash is stored as one value, so every change rewrites it whole, in the data file and in the Raft log; a hash of many thousands of fields is slow to change | One record per field once a hash grows, as Redis turns a listpack into a hash table; see [ADR 10](adr/0010-value-types.md) |
+| HSCAN returns a whole hash in one reply, and HRANDFIELD reads every field | A cursor over the field table of a large hash |
+| The fields of a large hash, like keys, must fit in RAM | Inherent to Bitcask, see the first row |
 | `CONFIG SET appendfsync` and `proto-max-bulk-len` change one node and last until restart | Store them with the users, as Raft entries |
 | A cross-log transaction costs two write rounds plus about 60 bytes of header and commit per log | Hash tags like `{user}:…` in Redis Cluster, so that related keys land in one log |
 | With `everysec` or `no`, a power loss can break the atomicity of a cross-log transaction | Fsync the parts before the commit records |
