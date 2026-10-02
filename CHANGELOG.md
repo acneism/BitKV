@@ -11,6 +11,7 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 - APPEND refuses to grow a string beyond 512 MB, as Redis does.
 - Bitmap commands SETBIT, GETBIT, BITCOUNT, BITPOS, BITOP, BITFIELD and BITFIELD_RO, with BYTE and BIT ranges and the overflow modes of Redis, and the ACL category `@bitmap`.
 - Hashes: HSET, HMSET, HSETNX, HGET, HMGET, HDEL, HLEN, HEXISTS, HSTRLEN, HGETALL, HKEYS, HVALS, HINCRBY, HINCRBYFLOAT, HSCAN and HRANDFIELD, and the ACL category `@hash`. Like Redis, a small hash is stored as one value and a hash of more than 128 fields, or with a field or value longer than 64 bytes, keeps each field in a record of its own, so a change writes only what it touches; see [hashes](docs/commands.md#hashes) and [ADR 11](docs/adr/0011-collection-members.md).
+- Sets: SADD, SREM, SISMEMBER, SMISMEMBER, SMEMBERS, SCARD, SPOP, SRANDMEMBER, SMOVE, SINTER, SINTERSTORE, SINTERCARD, SUNION, SUNIONSTORE, SDIFF, SDIFFSTORE and SSCAN, with the two encodings of hashes and the ACL category `@set`. See [sets](docs/commands.md#sets).
 - Value types in records: `TYPE`, `SCAN … TYPE` and `WRONGTYPE` follow the type of a key. See [ADR 10](docs/adr/0010-value-types.md).
 
 ### Upgrading from v0.13

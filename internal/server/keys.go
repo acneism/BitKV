@@ -13,7 +13,7 @@ var keyCommands = map[string]command{
 	"unlink":    {arity: -2, kind: kindWrite, keys: allArgs, acl: catKeyspace | catFast, tx: cmdDel},
 	"exists":    {arity: -2, kind: kindRead, keys: allArgs, acl: catKeyspace | catFast, tx: cmdExists},
 	"type":      {arity: 2, kind: kindRead, keys: oneKey, acl: catKeyspace | catFast, tx: cmdType},
-	"object":    {arity: -2, kind: kindRead, keys: keySpec{2, 2, 1}, acl: catKeyspace, tx: cmdObject},
+	"object":    {arity: -2, kind: kindRead, keys: keySpec{first: 2, last: 2, step: 1}, acl: catKeyspace, tx: cmdObject},
 	"keys":      {arity: 2, kind: kindRead, global: true, acl: catKeyspace | catDangerous, tx: cmdKeys},
 	"scan":      {arity: -2, kind: kindRead, global: true, acl: catKeyspace, tx: cmdScan},
 	"dbsize":    {arity: 1, kind: kindRead, global: true, acl: catKeyspace | catFast, tx: cmdDBSize},

@@ -46,24 +46,30 @@ type connFunc func(s *Server, c *client, args [][]byte) reply
 
 type keySpec struct {
 	first, last, step int
+	numkeys           int
 }
 
 var (
-	oneKey  = keySpec{1, 1, 1}
-	allArgs = keySpec{1, -1, 1}
-	pairs   = keySpec{1, -1, 2}
+	oneKey  = keySpec{first: 1, last: 1, step: 1}
+	allArgs = keySpec{first: 1, last: -1, step: 1}
+	pairs   = keySpec{first: 1, last: -1, step: 2}
 )
 
 func (k keySpec) extract(args [][]byte, dst []string) []string {
-	if k.step == 0 {
-		return dst
+	if k.step > 0 {
+		last := k.last
+		if last < 0 {
+			last += len(args)
+		}
+		for i := k.first; i <= last && i < len(args); i += k.step {
+			dst = append(dst, string(args[i]))
+		}
 	}
-	last := k.last
-	if last < 0 {
-		last += len(args)
-	}
-	for i := k.first; i <= last && i < len(args); i += k.step {
-		dst = append(dst, string(args[i]))
+	if k.numkeys > 0 && k.numkeys < len(args) {
+		n, ok := parseInt(args[k.numkeys])
+		for i := k.numkeys + 1; ok && i < len(args) && int64(i-k.numkeys) <= n; i++ {
+			dst = append(dst, string(args[i]))
+		}
 	}
 	return dst
 }
@@ -105,7 +111,7 @@ var commands map[string]command
 
 func init() {
 	commands = map[string]command{}
-	for _, table := range []map[string]command{serverCommands, keyCommands, stringCommands, bitCommands, hashCommands, transactionCommands, raftCommands, aclCommands} {
+	for _, table := range []map[string]command{serverCommands, keyCommands, stringCommands, bitCommands, hashCommands, setCommands, transactionCommands, raftCommands, aclCommands} {
 		maps.Copy(commands, table)
 	}
 	for id, name := range slices.Sorted(maps.Keys(commands)) {

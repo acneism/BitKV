@@ -7,7 +7,7 @@ CasketDB is early software. This page lists what it does not do yet, and how eac
 These are deliberate choices, not missing features:
 
 - sharding data across nodes, as Redis Cluster does;
-- data types other than strings and hashes: lists, sets, sorted sets, streams;
+- data types other than strings, hashes and sets: lists, sorted sets, streams;
 - Lua scripting and pub/sub;
 - RESP3;
 - databases other than `db 0`.
@@ -17,8 +17,8 @@ These are deliberate choices, not missing features:
 | Limitation | Possible fix |
 | --- | --- |
 | All keys must fit in RAM: about 80–100 bytes plus the key length per key | Inherent to Bitcask; a disk-based index would be a different engine |
-| HSCAN returns a whole hash in one reply, and HRANDFIELD reads every field | A cursor over the field table of a large hash |
-| The fields of a large hash, like keys, must fit in RAM | Inherent to Bitcask, see the first row |
+| HSCAN and SSCAN return a whole collection in one reply; HRANDFIELD, SPOP and SRANDMEMBER read every member | A cursor and random access over the member table of a large collection |
+| The fields of a large hash and the members of a large set, like keys, must fit in RAM | Inherent to Bitcask, see the first row |
 | `CONFIG SET appendfsync` and `proto-max-bulk-len` change one node and last until restart | Store them with the users, as Raft entries |
 | A cross-log transaction costs two write rounds plus about 60 bytes of header and commit per log | Hash tags like `{user}:…` in Redis Cluster, so that related keys land in one log |
 | With `everysec` or `no`, a power loss can break the atomicity of a cross-log transaction | Fsync the parts before the commit records |

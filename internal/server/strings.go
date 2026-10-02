@@ -30,7 +30,7 @@ var stringCommands = map[string]command{
 	"setrange":    {arity: 4, kind: kindWrite, keys: oneKey, acl: catString, tx: cmdSetRange},
 	"incrbyfloat": {arity: 3, kind: kindWrite, keys: oneKey, acl: catString | catFast, tx: cmdIncrByFloat},
 	"msetnx":      {arity: -3, kind: kindWrite, keys: pairs, acl: catString, tx: cmdMSetNX},
-	"lcs":         {arity: -3, kind: kindRead, keys: keySpec{1, 2, 1}, acl: catString, tx: cmdLCS},
+	"lcs":         {arity: -3, kind: kindRead, keys: keySpec{first: 1, last: 2, step: 1}, acl: catString, tx: cmdLCS},
 }
 
 const (

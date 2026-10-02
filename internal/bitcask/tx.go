@@ -345,6 +345,19 @@ func (tx *Tx) GetMember(key, member string) ([]byte, bool, error) {
 	return tx.readMember(i, s, memberRef{key, gen, member})
 }
 
+func (tx *Tx) HasMember(key, member string) (bool, error) {
+	gen, ok, err := tx.gen(key)
+	if err != nil || !ok {
+		return false, err
+	}
+	_, s := tx.shardFor(key)
+	if s == nil {
+		return false, ErrNotLocked
+	}
+	_, _, found := tx.lookupMember(s, memberRef{key, gen, member})
+	return found, nil
+}
+
 func (tx *Tx) lookupMember(s *shard, r memberRef) (pendingOp, entry, bool) {
 	if op, ok := tx.pendingMembers[r]; ok {
 		return op, entry{}, !op.deleted

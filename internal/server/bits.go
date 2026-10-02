@@ -12,7 +12,7 @@ var bitCommands = map[string]command{
 	"getbit":      {arity: 3, kind: kindRead, keys: oneKey, acl: catBitmap | catFast, tx: cmdGetBit},
 	"bitcount":    {arity: -2, kind: kindRead, keys: oneKey, acl: catBitmap, tx: cmdBitCount},
 	"bitpos":      {arity: -3, kind: kindRead, keys: oneKey, acl: catBitmap, tx: cmdBitPos},
-	"bitop":       {arity: -4, kind: kindWrite, keys: keySpec{2, -1, 1}, acl: catBitmap, tx: cmdBitOp},
+	"bitop":       {arity: -4, kind: kindWrite, keys: keySpec{first: 2, last: -1, step: 1}, acl: catBitmap, tx: cmdBitOp},
 	"bitfield":    {arity: -2, kind: kindWrite, keys: oneKey, acl: catBitmap, tx: cmdBitField},
 	"bitfield_ro": {arity: -2, kind: kindRead, keys: oneKey, acl: catBitmap | catFast, tx: cmdBitFieldRO},
 }

@@ -1,0 +1,224 @@
+package server
+
+import (
+	"bytes"
+	"encoding/binary"
+	"math/rand/v2"
+
+	"github.com/acneism/casketdb/internal/bitcask"
+)
+
+const (
+	maxRandomCount  = 1 << 24
+	maxListpackLen  = 128
+	maxListpackItem = 64
+)
+
+type listpack []byte
+
+func (l listpack) next() (field, value []byte, rest listpack, ok bool) {
+	n, k := binary.Uvarint(l)
+	if k <= 0 || n > uint64(len(l)-k) {
+		return nil, nil, nil, false
+	}
+	field, l = l[k:k+int(n)], l[k+int(n):]
+	n, k = binary.Uvarint(l)
+	if k <= 0 || n > uint64(len(l)-k) {
+		return nil, nil, nil, false
+	}
+	return field, l[k : k+int(n)], l[k+int(n):], true
+}
+
+func (l listpack) each(fn func(field, value []byte)) {
+	for rest := l; ; {
+		field, value, next, ok := rest.next()
+		if !ok {
+			return
+		}
+		fn(field, value)
+		rest = next
+	}
+}
+
+func (l listpack) len() int {
+	n := 0
+	l.each(func(_, _ []byte) { n++ })
+	return n
+}
+
+func (l listpack) find(field []byte) (start, end int, value []byte, ok bool) {
+	for rest := l; ; {
+		f, v, next, more := rest.next()
+		if !more {
+			return len(l), len(l), nil, false
+		}
+		if bytes.Equal(f, field) {
+			return len(l) - len(rest), len(l) - len(next), v, true
+		}
+		rest = next
+	}
+}
+
+func (l listpack) put(field, value []byte) (listpack, bool) {
+	start, end, _, found := l.find(field)
+	out := make(listpack, 0, len(l)-(end-start)+2*binary.MaxVarintLen64+len(field)+len(value))
+	out = append(out, l[:start]...)
+	out = binary.AppendUvarint(out, uint64(len(field)))
+	out = append(out, field...)
+	out = binary.AppendUvarint(out, uint64(len(value)))
+	out = append(out, value...)
+	return append(out, l[end:]...), !found
+}
+
+func (l listpack) del(field []byte) (listpack, bool) {
+	start, end, _, found := l.find(field)
+	if !found {
+		return l, false
+	}
+	return append(append(make(listpack, 0, len(l)-(end-start)), l[:start]...), l[end:]...), true
+}
+
+type collection struct {
+	tx    *bitcask.Tx
+	key   string
+	typ   bitcask.Kind
+	blob  listpack
+	table bool
+	gen   uint64
+	count int
+	dirty bool
+}
+
+func openCollection(tx *bitcask.Tx, key []byte, typ bitcask.Kind) (*collection, reply, error) {
+	value, kind, found, err := tx.GetKind(string(key))
+	if err != nil {
+		return nil, nil, err
+	}
+	c := &collection{tx: tx, key: string(key), typ: typ}
+	switch {
+	case !found:
+	case kind == typ:
+		c.blob = value
+	case kind == typ|bitcask.Table && len(value) >= 8:
+		n, _ := binary.Uvarint(value[8:])
+		c.table, c.gen, c.count = true, binary.LittleEndian.Uint64(value), int(n)
+	default:
+		return nil, errorReply(errWrongType), nil
+	}
+	return c, nil, nil
+}
+
+func (c *collection) len() int {
+	if c.table {
+		return c.count
+	}
+	return c.blob.len()
+}
+
+func (c *collection) get(field []byte) ([]byte, bool, error) {
+	if c.table {
+		return c.tx.GetMember(c.key, string(field))
+	}
+	_, _, value, ok := c.blob.find(field)
+	return value, ok, nil
+}
+
+func (c *collection) has(field []byte) (bool, error) {
+	if c.table {
+		return c.tx.HasMember(c.key, string(field))
+	}
+	_, _, _, ok := c.blob.find(field)
+	return ok, nil
+}
+
+func (c *collection) set(field, value []byte) (bool, error) {
+	c.dirty = true
+	if !c.table {
+		var added bool
+		c.blob, added = c.blob.put(field, value)
+		if len(field) > maxListpackItem || len(value) > maxListpackItem || (added && c.blob.len() > maxListpackLen) {
+			c.convert()
+		}
+		return added, nil
+	}
+	_, found, err := c.tx.GetMember(c.key, string(field))
+	if err != nil {
+		return false, err
+	}
+	c.tx.PutMember(c.key, string(field), value)
+	if !found {
+		c.count++
+	}
+	return !found, nil
+}
+
+func (c *collection) del(field []byte) bool {
+	var deleted bool
+	if c.table {
+		if deleted = c.tx.DeleteMember(c.key, string(field)); deleted {
+			c.count--
+		}
+	} else {
+		c.blob, deleted = c.blob.del(field)
+	}
+	c.dirty = c.dirty || deleted
+	return deleted
+}
+
+func (c *collection) each(values bool, fn func(field, value []byte)) error {
+	if c.table {
+		return c.tx.Members(c.key, values, func(field string, value []byte) bool {
+			fn([]byte(field), value)
+			return true
+		})
+	}
+	c.blob.each(fn)
+	return nil
+}
+
+func (c *collection) meta() []byte {
+	return binary.AppendUvarint(binary.LittleEndian.AppendUint64(nil, c.gen), uint64(c.count))
+}
+
+func (c *collection) convert() {
+	for c.gen == 0 {
+		c.gen = rand.Uint64()
+	}
+	expireAt, _ := c.tx.ExpireAt(c.key)
+	c.table = true
+	c.tx.PutKind(c.key, c.typ|bitcask.Table, c.meta(), expireAt)
+	c.blob.each(func(field, value []byte) {
+		c.tx.PutMember(c.key, string(field), value)
+		c.count++
+	})
+	c.blob = nil
+}
+
+func (c *collection) store() {
+	if !c.dirty {
+		return
+	}
+	expireAt, _ := c.tx.ExpireAt(c.key)
+	switch {
+	case c.len() == 0:
+		c.tx.Delete(c.key)
+	case c.table:
+		c.tx.PutKind(c.key, c.typ|bitcask.Table, c.meta(), expireAt)
+	default:
+		c.tx.PutKind(c.key, c.typ, c.blob, expireAt)
+	}
+}
+
+func randomPicks(n int, count int64) []int {
+	switch {
+	case n == 0:
+		return nil
+	case count < 0:
+		picks := make([]int, -count)
+		for i := range picks {
+			picks[i] = rand.IntN(n)
+		}
+		return picks
+	}
+	return rand.Perm(n)[:min(int(count), n)]
+}
