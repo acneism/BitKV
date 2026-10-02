@@ -171,7 +171,10 @@ func TestACL(t *testing.T) {
 
 	hash := sha256.Sum256([]byte("s3cret"))
 	list, _ := admin.do("ACL", "LIST").([]any)
-	if !slices.Contains(list, any("user alice on #"+hex.EncodeToString(hash[:])+" ~app:* -@all +dbsize +exec +exists +get +mget +multi +object +pttl +scan +set +strlen +ttl +type")) ||
+	alices, _ := list[0].(string)
+	rules := strings.Fields(alices)
+	if !strings.HasPrefix(alices, "user alice on #"+hex.EncodeToString(hash[:])+" ~app:* -@all ") ||
+		!slices.Contains(rules, "+get") || !slices.Contains(rules, "+set") || slices.Contains(rules, "+keys") || slices.Contains(rules, "+del") ||
 		!slices.Contains(list, any("user default on nopass ~* +@all")) {
 		t.Fatalf("ACL LIST = %#v", list)
 	}

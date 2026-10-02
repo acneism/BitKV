@@ -6,7 +6,7 @@ CasketDB implements the string subset of Redis 7 over RESP2. Semantics, replies 
 
 | Group | Commands | Notes |
 | --- | --- | --- |
-| Strings | GET, SET, SETNX, SETEX, PSETEX, GETDEL, MGET, MSET, APPEND, STRLEN, INCR, DECR, INCRBY, DECRBY | SET accepts EX, PX, EXAT, PXAT, NX, XX, KEEPTTL, GET. MSET and INCR* are atomic |
+| Strings | GET, SET, SETNX, SETEX, PSETEX, GETSET, GETEX, GETDEL, MGET, MSET, MSETNX, APPEND, STRLEN, GETRANGE, SETRANGE, INCR, DECR, INCRBY, DECRBY, INCRBYFLOAT, LCS | SET accepts EX, PX, EXAT, PXAT, NX, XX, KEEPTTL, GET; GETEX accepts EX, PX, EXAT, PXAT, PERSIST; LCS accepts LEN, IDX, MINMATCHLEN, WITHMATCHLEN. MSET, MSETNX and INCR* are atomic |
 | Keys | DEL, UNLINK, EXISTS, TYPE, OBJECT, KEYS, SCAN, DBSIZE | Glob patterns `*`, `?`, `[a-z]`, `[^x]`, `\`. SCAN accepts MATCH, COUNT, TYPE. OBJECT supports ENCODING only: `int`, `embstr` or `raw` for a string, as in Redis |
 | Expiry | EXPIRE, PEXPIRE, EXPIREAT, PEXPIREAT, TTL, PTTL, PERSIST | NX, XX, GT, LT. A time in the past deletes the key. TTL returns −2 for a missing key and −1 for a key without expiry |
 | Transactions | MULTI, EXEC, DISCARD, WATCH, UNWATCH | See [transactions](#transactions) |
@@ -21,9 +21,13 @@ CasketDB implements the string subset of Redis 7 over RESP2. Semantics, replies 
 
 Only strings. Lists, hashes, sets, sorted sets, streams, bitmaps, HyperLogLog, geo, pub/sub, Lua and Functions are not implemented. `TYPE` returns `string` or `none`.
 
-### Integers
+### Numbers and string sizes
 
 INCR, DECR, INCRBY and DECRBY accept a strict 64-bit integer: no leading `+`, no leading zeros. Overflow returns an error, as in Redis.
+
+INCRBYFLOAT computes with 64-bit floating point and stores the shortest decimal form of the result. Redis computes with `long double`, so the last digits of a result can differ: `0.1` plus `0.2` is `0.30000000000000004` here and `0.3` in Redis.
+
+APPEND, SETRANGE and LCS limit a string, or the memory LCS needs, to 512 MB, the default `proto-max-bulk-len` of Redis, whatever `-proto-max-bulk-len` is set to.
 
 ### SCAN
 

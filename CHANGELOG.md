@@ -7,6 +7,8 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 ### Added
 
 - `OBJECT ENCODING` answers `int`, `embstr` or `raw` for a string, as Redis does.
+- String commands GETSET, GETEX, GETRANGE, SETRANGE, INCRBYFLOAT, MSETNX and LCS. INCRBYFLOAT uses 64-bit floating point, so its last digits can differ from Redis; see [numbers and string sizes](docs/commands.md#numbers-and-string-sizes).
+- APPEND refuses to grow a string beyond 512 MB, as Redis does.
 - Groundwork for data types other than strings: a record can carry the type of its value, and commands answer `WRONGTYPE` for a key of another type. No command writes such values yet. See [ADR 10](docs/adr/0010-value-types.md).
 
 ### Upgrading from v0.13

@@ -329,9 +329,11 @@ func TestTypes(t *testing.T) {
 	c.expect(status("hash"), "TYPE", "h")
 	c.expect(status("string"), "TYPE", "s")
 	c.expect(status("none"), "TYPE", "missing")
-	for _, cmd := range [][]string{{"GET", "h"}, {"INCR", "h"}, {"APPEND", "h", "x"}, {"STRLEN", "h"}, {"GETDEL", "h"}, {"SET", "h", "x", "GET"}} {
+	for _, cmd := range [][]string{{"GET", "h"}, {"INCR", "h"}, {"APPEND", "h", "x"}, {"STRLEN", "h"}, {"GETDEL", "h"}, {"SET", "h", "x", "GET"},
+		{"GETSET", "h", "x"}, {"GETEX", "h"}, {"GETRANGE", "h", "0", "1"}, {"SETRANGE", "h", "0", "x"}, {"INCRBYFLOAT", "h", "1"}} {
 		c.expect(errReply(errWrongType), cmd...)
 	}
+	c.expect(errReply("ERR The specified keys must contain string values"), "LCS", "h", "s")
 	c.expect([]any{"v", nil}, "MGET", "s", "h")
 	c.expect(int64(1), "EXPIRE", "h", "100")
 	c.expect(status("hash"), "TYPE", "h")
@@ -353,6 +355,62 @@ func TestTypes(t *testing.T) {
 	c.expect("x", "GET", "s2")
 	c.expect(status("OK"), "SET", "h", "plain")
 	c.expect(status("string"), "TYPE", "h")
+}
+
+func TestStringCommands(t *testing.T) {
+	srv, db, addr := startServer(t, t.TempDir())
+	defer stopServer(t, srv, db)
+	c := dial(t, addr)
+
+	c.expect(nil, "GETSET", "k", "a")
+	c.expect("a", "GETSET", "k", "b")
+	c.expect("b", "GETEX", "k", "EX", "100")
+	c.expect(int64(100), "TTL", "k")
+	c.expect("b", "GETEX", "k", "PERSIST")
+	c.expect(int64(-1), "TTL", "k")
+	c.expect(nil, "GETEX", "missing", "EX", "10")
+	c.expect(errReply("ERR invalid expire time in 'getex' command"), "GETEX", "k", "EX", "0")
+	c.expect(errReply(errSyntax), "GETEX", "k", "EX", "10", "PERSIST")
+	c.expect("b", "GETEX", "k", "PXAT", "1")
+	c.expect(int64(0), "EXISTS", "k")
+
+	c.expect(status("OK"), "SET", "s", "This is a string")
+	for _, tc := range [][3]string{{"0", "3", "This"}, {"-3", "-1", "ing"}, {"0", "-1", "This is a string"}, {"10", "100", "string"}, {"-1", "-5", ""}, {"5", "3", ""}, {"-100", "2", "Thi"}} {
+		c.expect(tc[2], "GETRANGE", "s", tc[0], tc[1])
+	}
+	c.expect("", "GETRANGE", "missing", "0", "-1")
+
+	c.expect(status("OK"), "SET", "key1", "Hello World")
+	c.expect(int64(11), "SETRANGE", "key1", "6", "Redis")
+	c.expect("Hello Redis", "GET", "key1")
+	c.expect(int64(11), "SETRANGE", "key2", "6", "Redis")
+	c.expect("\x00\x00\x00\x00\x00\x00Redis", "GET", "key2")
+	c.expect(int64(0), "SETRANGE", "key3", "5", "")
+	c.expect(int64(0), "EXISTS", "key3")
+	c.expect(errReply("ERR offset is out of range"), "SETRANGE", "key1", "-1", "x")
+	c.expect(errReply(errTooBig), "SETRANGE", "key1", "536870911", "xx")
+
+	c.expect(status("OK"), "SET", "f", "10.50")
+	c.expect("10.6", "INCRBYFLOAT", "f", "0.1")
+	c.expect("5.6", "INCRBYFLOAT", "f", "-5")
+	c.expect(status("OK"), "SET", "f", "5.0e3")
+	c.expect("5200", "INCRBYFLOAT", "f", "2.0e2")
+	c.expect(errReply(errNotFloat), "INCRBYFLOAT", "f", "abc")
+	c.expect(errReply(errFloatEdge), "INCRBYFLOAT", "f", "inf")
+	c.expect("1.5", "INCRBYFLOAT", "nf", "1.5")
+
+	c.expect(int64(1), "MSETNX", "m1", "Hello", "m2", "there")
+	c.expect(int64(0), "MSETNX", "m2", "new", "m3", "world")
+	c.expect([]any{"Hello", "there", nil}, "MGET", "m1", "m2", "m3")
+
+	c.expect(status("OK"), "MSET", "key1", "ohmytext", "key2", "mynewtext")
+	c.expect("mytext", "LCS", "key1", "key2")
+	c.expect(int64(6), "LCS", "key1", "key2", "LEN")
+	span := func(a, b, c, d int64) []any { return []any{[]any{a, b}, []any{c, d}} }
+	c.expect([]any{"matches", []any{span(4, 7, 5, 8), span(2, 3, 0, 1)}, "len", int64(6)}, "LCS", "key1", "key2", "IDX")
+	c.expect([]any{"matches", []any{append(span(4, 7, 5, 8), int64(4))}, "len", int64(6)}, "LCS", "key1", "key2", "IDX", "MINMATCHLEN", "4", "WITHMATCHLEN")
+	c.expect(errReply("ERR If you want both"), "LCS", "key1", "key2", "IDX", "LEN")
+	c.expect("", "LCS", "missing1", "missing2")
 }
 
 func TestKeysAndScan(t *testing.T) {
