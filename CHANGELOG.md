@@ -10,11 +10,13 @@ Versions are listed newest first. CasketDB was called BitKV up to and including 
 - String commands GETSET, GETEX, GETRANGE, SETRANGE, INCRBYFLOAT, MSETNX and LCS. INCRBYFLOAT uses 64-bit floating point, so its last digits can differ from Redis; see [numbers and string sizes](docs/commands.md#numbers-and-string-sizes).
 - APPEND refuses to grow a string beyond 512 MB, as Redis does.
 - Bitmap commands SETBIT, GETBIT, BITCOUNT, BITPOS, BITOP, BITFIELD and BITFIELD_RO, with BYTE and BIT ranges and the overflow modes of Redis, and the ACL category `@bitmap`.
-- Groundwork for data types other than strings: a record can carry the type of its value, and commands answer `WRONGTYPE` for a key of another type. No command writes such values yet. See [ADR 10](docs/adr/0010-value-types.md).
+- Hashes: HSET, HMSET, HSETNX, HGET, HMGET, HDEL, HLEN, HEXISTS, HSTRLEN, HGETALL, HKEYS, HVALS, HINCRBY, HINCRBYFLOAT, HSCAN and HRANDFIELD, and the ACL category `@hash`. A hash is stored as one value, so changes to a hash of many thousands of fields are slow; see [hashes](docs/commands.md#hashes).
+- Value types in records: `TYPE`, `SCAN … TYPE` and `WRONGTYPE` follow the type of a key. See [ADR 10](docs/adr/0010-value-types.md).
 
 ### Upgrading from v0.13
 
 - Data directories open unchanged, but their `META` becomes version 2 at the first start, and v0.13 and older refuse the directory after that. Back it up first if you may need to go back.
+- In a cluster, upgrade every node before the first write to a hash: a v0.13 node stops at the new kind of Raft entry it carries.
 
 ## v0.13 — 2026-10-01
 

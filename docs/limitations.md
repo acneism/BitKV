@@ -7,7 +7,7 @@ CasketDB is early software. This page lists what it does not do yet, and how eac
 These are deliberate choices, not missing features:
 
 - sharding data across nodes, as Redis Cluster does;
-- data types other than strings: lists, hashes, sets, sorted sets, streams;
+- data types other than strings and hashes: lists, sets, sorted sets, streams;
 - Lua scripting and pub/sub;
 - RESP3;
 - databases other than `db 0`.
@@ -17,6 +17,7 @@ These are deliberate choices, not missing features:
 | Limitation | Possible fix |
 | --- | --- |
 | All keys must fit in RAM: about 80–100 bytes plus the key length per key | Inherent to Bitcask; a disk-based index would be a different engine |
+| A hash is stored as one value, so every change rewrites it whole, in the data file and in the Raft log; a hash of many thousands of fields is slow to change | One record per field once a hash grows, as Redis turns a listpack into a hash table; see [ADR 10](adr/0010-value-types.md) |
 | `CONFIG SET appendfsync` and `proto-max-bulk-len` change one node and last until restart | Store them with the users, as Raft entries |
 | A cross-log transaction costs two write rounds plus about 60 bytes of header and commit per log | Hash tags like `{user}:…` in Redis Cluster, so that related keys land in one log |
 | With `everysec` or `no`, a power loss can break the atomicity of a cross-log transaction | Fsync the parts before the commit records |

@@ -105,7 +105,7 @@ var commands map[string]command
 
 func init() {
 	commands = map[string]command{}
-	for _, table := range []map[string]command{serverCommands, keyCommands, stringCommands, bitCommands, transactionCommands, raftCommands, aclCommands} {
+	for _, table := range []map[string]command{serverCommands, keyCommands, stringCommands, bitCommands, hashCommands, transactionCommands, raftCommands, aclCommands} {
 		maps.Copy(commands, table)
 	}
 	for id, name := range slices.Sorted(maps.Keys(commands)) {

@@ -90,7 +90,7 @@ A record in a `.data` file is a 21-byte header, then the key and the value. Inte
 | valueLen | 4 | Value length |
 | key, value | keyLen + valueLen | Data |
 
-A batch in one log is a run of records where every record except the last has the "batch continues" flag. An index mark is a record with flag 32, an empty key and the 8-byte index as its value. A record with flag 64 holds a value that is not a string: the first byte of the value is its type, numbered as in Redis (1 list, 2 set, 3 sorted set, 4 hash, 6 stream), and the rest is the encoded collection. A string has neither the flag nor the byte. See [ADR 10](adr/0010-value-types.md).
+A batch in one log is a run of records where every record except the last has the "batch continues" flag. An index mark is a record with flag 32, an empty key and the 8-byte index as its value. A record with flag 64 holds a value that is not a string: the first byte of the value is its type, numbered as in Redis (1 list, 2 set, 3 sorted set, 4 hash, 6 stream), and the rest is the encoded collection. A string has neither the flag nor the byte. A hash is its fields in the order they were added, each as the field's length (uvarint), the field, the value's length (uvarint) and the value. See [ADR 10](adr/0010-value-types.md).
 
 A record in a `.hint` file is crc (4) + expireAt (8) + offset (8) + keyLen (4) + valueLen (4) + key. Hint files let the loader build the key index without reading values; only merge writes them.
 

@@ -7,6 +7,7 @@ CasketDB implements the string subset of Redis 7 over RESP2. Semantics, replies 
 | Group | Commands | Notes |
 | --- | --- | --- |
 | Strings | GET, SET, SETNX, SETEX, PSETEX, GETSET, GETEX, GETDEL, MGET, MSET, MSETNX, APPEND, STRLEN, GETRANGE, SETRANGE, INCR, DECR, INCRBY, DECRBY, INCRBYFLOAT, LCS | SET accepts EX, PX, EXAT, PXAT, NX, XX, KEEPTTL, GET; GETEX accepts EX, PX, EXAT, PXAT, PERSIST; LCS accepts LEN, IDX, MINMATCHLEN, WITHMATCHLEN. MSET, MSETNX and INCR* are atomic |
+| Hashes | HSET, HMSET, HSETNX, HGET, HMGET, HDEL, HLEN, HEXISTS, HSTRLEN, HGETALL, HKEYS, HVALS, HINCRBY, HINCRBYFLOAT, HSCAN, HRANDFIELD | See [hashes](#hashes) |
 | Bitmaps | SETBIT, GETBIT, BITCOUNT, BITPOS, BITOP, BITFIELD, BITFIELD_RO | Bitmaps are strings. BITCOUNT and BITPOS accept BYTE and BIT ranges; BITOP supports AND, OR, XOR and NOT; BITFIELD supports GET, SET, INCRBY and OVERFLOW WRAP, SAT or FAIL. A bit offset is below 2³² |
 | Keys | DEL, UNLINK, EXISTS, TYPE, OBJECT, KEYS, SCAN, DBSIZE | Glob patterns `*`, `?`, `[a-z]`, `[^x]`, `\`. SCAN accepts MATCH, COUNT, TYPE. OBJECT supports ENCODING only: `int`, `embstr` or `raw` for a string, as in Redis |
 | Expiry | EXPIRE, PEXPIRE, EXPIREAT, PEXPIREAT, TTL, PTTL, PERSIST | NX, XX, GT, LT. A time in the past deletes the key. TTL returns −2 for a missing key and −1 for a key without expiry |
@@ -20,7 +21,15 @@ CasketDB implements the string subset of Redis 7 over RESP2. Semantics, replies 
 
 ### Data types
 
-Only strings, including the bitmap commands. Lists, hashes, sets, sorted sets, streams, HyperLogLog, geo, pub/sub, Lua and Functions are not implemented. `TYPE` returns `string` or `none`.
+Strings, including the bitmap commands, and hashes. Lists, sets, sorted sets, streams, HyperLogLog, geo, pub/sub, Lua and Functions are not implemented.
+
+### Hashes
+
+A hash is stored as one value, its fields in the order they were added, like a small hash in Redis, and `OBJECT ENCODING` answers `listpack` for it. Every change rewrites the whole hash, in the data file and in the Raft log, so a hash of many thousands of fields is slow to change; see [limitations](limitations.md). Because of that:
+
+- HSCAN returns every matching field in one reply with cursor `0`, as Redis does for a small hash, and accepts `NOVALUES`. COUNT is checked but does not split the reply.
+- HRANDFIELD with a count accepts at most 16,777,216 fields either way; Redis has no such limit.
+- Field expiry (HEXPIRE and the other commands of Redis 7.4) is not supported. `TYPE` returns `string` or `none`.
 
 ### Numbers and string sizes
 
@@ -57,7 +66,7 @@ Users work as in Redis 6 and later. `default` always exists; `CONFIG SET require
 
 Users are kept in the file `SYSTEM` in the data directory and survive restarts; once it exists, `-requirepass` is ignored at start, with a warning. In a cluster a change to users is a Raft entry: run it on the leader, a follower answers `READONLY`, and every node applies it and includes it in snapshots. FLUSHDB does not touch users.
 
-`ACL SETUSER` understands `on`, `off`, `>password`, `<password`, `#hash`, `!hash`, `nopass`, `resetpass`, `~pattern`, `allkeys`, `resetkeys`, `+command`, `-command`, `+@category`, `-@category`, `allcommands`, `nocommands` and `reset`. A new user starts `off`, without passwords, keys or commands. The categories are `keyspace`, `read`, `write`, `string`, `bitmap`, `fast`, `slow`, `admin`, `dangerous`, `connection` and `transaction`, assigned as in Redis; `RAFT` is `@admin` and `@dangerous`. A denied command answers `NOPERM`, and inside MULTI it aborts EXEC. `ACL LOG [count|RESET]` lists the latest denials of commands, keys and logins on this node, newest first, up to 128; a repeat within a minute adds to the count of its entry.
+`ACL SETUSER` understands `on`, `off`, `>password`, `<password`, `#hash`, `!hash`, `nopass`, `resetpass`, `~pattern`, `allkeys`, `resetkeys`, `+command`, `-command`, `+@category`, `-@category`, `allcommands`, `nocommands` and `reset`. A new user starts `off`, without passwords, keys or commands. The categories are `keyspace`, `read`, `write`, `string`, `bitmap`, `hash`, `fast`, `slow`, `admin`, `dangerous`, `connection` and `transaction`, assigned as in Redis; `RAFT` is `@admin` and `@dangerous`. A denied command answers `NOPERM`, and inside MULTI it aborts EXEC. `ACL LOG [count|RESET]` lists the latest denials of commands, keys and logins on this node, newest first, up to 128; a repeat within a minute adds to the count of its entry.
 
 Differences from Redis:
 
