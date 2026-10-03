@@ -92,7 +92,7 @@ func TestOrderedViewModel(t *testing.T) {
 			model = append(model, skipItem{v, m})
 		}
 		slices.SortFunc(model, compareItems)
-		view := newOrderedView(stored, nodes, changed)
+		view := newOrderedView(stored, nodes, changed, false)
 		if view.length() != len(model) {
 			t.Fatalf("round %d: length %d, model %d", round, view.length(), len(model))
 		}

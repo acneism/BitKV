@@ -48,6 +48,7 @@ type keySpec struct {
 	first, last, step int
 	numkeys           int
 	storeFrom         int
+	streams           bool
 }
 
 var (
@@ -76,6 +77,14 @@ func (k keySpec) extract(args [][]byte, dst []string) []string {
 		if opt := upper(args[i]); opt == "STORE" || opt == "STOREDIST" {
 			dst = append(dst, string(args[i+1]))
 			i++
+		}
+	}
+	for i := 1; k.streams && i < len(args); i++ {
+		if upper(args[i]) == "STREAMS" {
+			for _, key := range args[i+1 : i+1+(len(args)-i-1)/2] {
+				dst = append(dst, string(key))
+			}
+			break
 		}
 	}
 	return dst
@@ -119,7 +128,7 @@ var commands map[string]command
 
 func init() {
 	commands = map[string]command{}
-	for _, table := range []map[string]command{serverCommands, keyCommands, stringCommands, bitCommands, hashCommands, setCommands, listCommands, zsetCommands, blockingCommands, hyperLogLogCommands, geoCommands, transactionCommands, raftCommands, aclCommands} {
+	for _, table := range []map[string]command{serverCommands, keyCommands, stringCommands, bitCommands, hashCommands, setCommands, listCommands, zsetCommands, blockingCommands, hyperLogLogCommands, geoCommands, streamCommands, transactionCommands, raftCommands, aclCommands} {
 		maps.Copy(commands, table)
 	}
 	for id, name := range slices.Sorted(maps.Keys(commands)) {

@@ -160,7 +160,7 @@ type orderedView struct {
 	added   *skiplist
 }
 
-func newOrderedView(stored *skiplist, nodes map[string]*skipNode, changed map[string]pendingOp) *orderedView {
+func newOrderedView(stored *skiplist, nodes map[string]*skipNode, changed map[string]pendingOp, byMember bool) *orderedView {
 	v := &orderedView{stored: stored, changed: changed, added: newSkiplist()}
 	for m, op := range changed {
 		if n := nodes[m]; n != nil {
@@ -169,7 +169,11 @@ func newOrderedView(stored *skiplist, nodes map[string]*skipNode, changed map[st
 				return orderLess(value, member, n.value, n.member)
 			}))
 		}
-		if !op.deleted {
+		switch {
+		case op.deleted:
+		case byMember:
+			v.added.insert(nil, m)
+		default:
 			v.added.insert(op.value, m)
 		}
 	}

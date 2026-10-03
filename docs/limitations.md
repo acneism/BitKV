@@ -7,7 +7,6 @@ CasketDB is early software. This page lists what it does not do yet, and how eac
 These are deliberate choices, not missing features:
 
 - sharding data across nodes, as Redis Cluster does;
-- data types other than strings, hashes, sets, lists and sorted sets: streams;
 - Lua scripting and pub/sub;
 - RESP3;
 - databases other than `db 0`.
@@ -19,6 +18,7 @@ These are deliberate choices, not missing features:
 | All keys must fit in RAM: about 80–100 bytes plus the key length per key | Inherent to Bitcask; a disk-based index would be a different engine |
 | HSCAN, SSCAN and ZSCAN return a whole collection in one reply; HRANDFIELD, SPOP, SRANDMEMBER and ZRANDMEMBER read every member | A cursor and random access over the member table of a large collection |
 | The start of a database reads every member of a large sorted set, one read per member | Keep the score of such members in hint files |
+| A stream entry costs about as much memory as a key | Pack entries into records of up to 100, as Redis packs them into nodes |
 | The fields of a large hash and the members of a large set, like keys, must fit in RAM | Inherent to Bitcask, see the first row |
 | `CONFIG SET appendfsync` and `proto-max-bulk-len` change one node and last until restart | Store them with the users, as Raft entries |
 | A cross-log transaction costs two write rounds plus about 60 bytes of header and commit per log | Hash tags like `{user}:…` in Redis Cluster, so that related keys land in one log |

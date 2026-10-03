@@ -1227,6 +1227,52 @@ func TestOrderedMembers(t *testing.T) {
 	checkAcrossRestart(t, db, dir, o, check)
 }
 
+func TestOrderedByMember(t *testing.T) {
+	dir := t.TempDir()
+	o := testOptions()
+	db := mustOpen(t, dir, o)
+	kind := Table | Ordered | ByMember | 6
+	if err := db.Update(Keys("s"), func(tx *Tx) error {
+		tx.PutKind("s", kind, tableValue(9), 0)
+		for _, m := range []string{"c", "a", "d", "b"} {
+			tx.PutMember("s", m, []byte("value of "+m))
+		}
+		if got := inOrder(t, tx, "s", false); !slices.Equal(got, []string{"a=", "b=", "c=", "d="}) {
+			t.Errorf("order inside the creating transaction = %v", got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Update(Keys("s"), func(tx *Tx) error {
+		tx.PutKind("s", kind, tableValue(9), 0)
+		tx.DeleteMember("s", "b")
+		tx.PutMember("s", "aa", []byte("z"))
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	check := func(db *DB) {
+		t.Helper()
+		if err := db.View(Keys("s"), func(tx *Tx) error {
+			if got := inOrder(t, tx, "s", true); !slices.Equal(got, []string{"d=", "c=", "aa=", "a="}) {
+				t.Errorf("reverse order = %v", got)
+			}
+			if v, ok, err := tx.GetMember("s", "c"); string(v) != "value of c" || !ok || err != nil {
+				t.Errorf("GetMember c = %q, %v, %v", v, ok, err)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check(db)
+	if err := db.Merge(); err != nil {
+		t.Fatal(err)
+	}
+	checkAcrossRestart(t, db, dir, o, check)
+}
+
 func TestProposedMembers(t *testing.T) {
 	db := mustOpen(t, t.TempDir(), testOptions())
 	defer mustClose(t, db)

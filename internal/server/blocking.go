@@ -34,6 +34,7 @@ type blockReply struct {
 	timeout time.Duration
 	keys    [][]byte
 	empty   reply
+	retry   [][]byte
 }
 
 func (r blockReply) writeTo(w *resp.Writer) { r.empty.writeTo(w) }
@@ -74,7 +75,7 @@ func blockingPop(left bool) txFunc {
 			l.store()
 			return arrayReply{bulkReply(key), bulkReply(v)}, nil
 		}
-		return blockReply{timeout, keys, nullArrayReply{}}, nil
+		return blockReply{timeout: timeout, keys: keys, empty: nullArrayReply{}}, nil
 	}
 }
 
@@ -100,7 +101,7 @@ func blockingMove(tx *bitcask.Tx, args [][]byte, from, to bool, timeoutArg []byt
 	if _, empty := r.(nullReply); !empty || err != nil {
 		return r, err
 	}
-	return blockReply{timeout, args[1:2], nilReply}, nil
+	return blockReply{timeout: timeout, keys: args[1:2], empty: nilReply}, nil
 }
 
 func cmdBLMPop(tx *bitcask.Tx, args [][]byte) (reply, error) {
@@ -124,7 +125,7 @@ func blockingMPop(tx *bitcask.Tx, args [][]byte, first, last string, pop func(*b
 	if _, empty := r.(nullArrayReply); !empty || err != nil {
 		return r, err
 	}
-	return blockReply{timeout, p.keys, nullArrayReply{}}, nil
+	return blockReply{timeout: timeout, keys: p.keys, empty: nullArrayReply{}}, nil
 }
 
 func blockingZPop(highest bool) txFunc {
@@ -148,7 +149,7 @@ func blockingZPop(highest bool) txFunc {
 			}
 			return arrayReply{bulkReply(key), bulkReply(items[0].member), scoreReply(items[0].score)}, nil
 		}
-		return blockReply{timeout, keys, nullArrayReply{}}, nil
+		return blockReply{timeout: timeout, keys: keys, empty: nullArrayReply{}}, nil
 	}
 }
 
@@ -238,6 +239,9 @@ func (s *Server) block(c *client, cmd command, args [][]byte, b blockReply) repl
 		expired = t.C
 	}
 	for {
+		if b.retry != nil {
+			args = b.retry
+		}
 		r, err := s.call(cmd, args)
 		switch {
 		case errors.Is(err, replica.ErrNotLeader), errors.Is(err, replica.ErrLeadershipLost):

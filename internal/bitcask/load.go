@@ -96,7 +96,7 @@ func (st *loadState) attachMembers() error {
 					return err
 				}
 				if gen, ok := tableGen(kind, v); ok {
-					t = s.ensureTable(r.key, gen, kind&Ordered != 0)
+					t = s.ensureTable(r.key, gen, kind)
 				}
 			}
 			tables[r.key] = t
@@ -105,7 +105,7 @@ func (st *loadState) attachMembers() error {
 			continue
 		}
 		var value []byte
-		if t.order != nil {
+		if t.order != nil && !t.byMember {
 			v, err := st.g.readMember(s, r, e)
 			if err != nil {
 				return err

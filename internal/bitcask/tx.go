@@ -487,10 +487,15 @@ func (tx *Tx) Members(key string, values bool, fn func(member string, value []by
 }
 
 func (tx *Tx) orderedMembers(key string) (*orderedView, error) {
-	gen, ok, err := tx.gen(key)
+	v, kind, ok, err := tx.GetKind(key)
 	if err != nil || !ok {
 		return nil, err
 	}
+	gen, ok := tableGen(kind, v)
+	if !ok {
+		return nil, nil
+	}
+	byMember := kind&ByMember != 0
 	_, s := tx.shardFor(key)
 	if s == nil {
 		return nil, ErrNotLocked
@@ -512,16 +517,16 @@ func (tx *Tx) orderedMembers(key string) (*orderedView, error) {
 	t := s.tables[key]
 	switch {
 	case t == nil || t.gen != gen:
-		return newOrderedView(newSkiplist(), nil, changed), nil
+		return newOrderedView(newSkiplist(), nil, changed, byMember), nil
 	case t.order != nil:
-		return newOrderedView(t.order, t.nodes, changed), nil
+		return newOrderedView(t.order, t.nodes, changed, byMember), nil
 	}
 	sl := newSkiplist()
-	err = tx.Members(key, true, func(member string, value []byte) bool {
+	err = tx.Members(key, !byMember, func(member string, value []byte) bool {
 		sl.insert(value, member)
 		return true
 	})
-	return newOrderedView(sl, nil, nil), err
+	return newOrderedView(sl, nil, nil, byMember), err
 }
 
 func (tx *Tx) MemberCount(key string, below func(value []byte, member string) bool) (int, error) {
@@ -953,7 +958,7 @@ func (gb *groupBatch) apply(tx *Tx) {
 		stored := storedSize(op.kind, op.value)
 		s.set(key, entry{fileID: b.df.id, offset: off, valueSize: uint32(stored), expireAt: op.expireAt})
 		if gen, ok := tableGen(op.kind, op.value); ok {
-			s.ensureTable(key, gen, op.kind&Ordered != 0)
+			s.ensureTable(key, gen, op.kind)
 		} else {
 			s.dropTable(key)
 		}

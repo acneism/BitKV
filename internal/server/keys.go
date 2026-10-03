@@ -66,7 +66,7 @@ func cmdType(tx *bitcask.Tx, args [][]byte) (reply, error) {
 }
 
 func baseKind(kind bitcask.Kind) bitcask.Kind {
-	return kind &^ (bitcask.Table | bitcask.Ordered)
+	return kind &^ (bitcask.Table | bitcask.Ordered | bitcask.ByMember)
 }
 
 func cmdObject(tx *bitcask.Tx, args [][]byte) (reply, error) {
@@ -79,6 +79,9 @@ func cmdObject(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	}
 	if kind == typeList|bitcask.Table {
 		return bulkReply("quicklist"), nil
+	}
+	if baseKind(kind) == typeStream {
+		return bulkReply("stream"), nil
 	}
 	if kind&bitcask.Ordered != 0 {
 		return bulkReply("skiplist"), nil

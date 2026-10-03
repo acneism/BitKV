@@ -41,9 +41,10 @@ const (
 	catBlocking
 	catHyperLogLog
 	catGeo
+	catStream
 )
 
-var categoryNames = []string{"keyspace", "read", "write", "string", "fast", "slow", "admin", "dangerous", "connection", "transaction", "bitmap", "hash", "set", "list", "sortedset", "blocking", "hyperloglog", "geo"}
+var categoryNames = []string{"keyspace", "read", "write", "string", "fast", "slow", "admin", "dangerous", "connection", "transaction", "bitmap", "hash", "set", "list", "sortedset", "blocking", "hyperloglog", "geo", "stream"}
 
 func (cmd command) categories() category {
 	c := cmd.acl

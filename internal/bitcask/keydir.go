@@ -47,10 +47,11 @@ type shard struct {
 }
 
 type table struct {
-	gen     uint64
-	members map[string]entry
-	order   *skiplist
-	nodes   map[string]*skipNode
+	gen      uint64
+	members  map[string]entry
+	order    *skiplist
+	nodes    map[string]*skipNode
+	byMember bool
 }
 
 func (r memberRef) size(e entry) int64 {
@@ -71,7 +72,7 @@ func (s *shard) member(r memberRef) (entry, bool) {
 	return e, ok
 }
 
-func (s *shard) ensureTable(key string, gen uint64, ordered bool) *table {
+func (s *shard) ensureTable(key string, gen uint64, kind Kind) *table {
 	if t := s.tables[key]; t != nil && t.gen == gen {
 		return t
 	}
@@ -79,8 +80,8 @@ func (s *shard) ensureTable(key string, gen uint64, ordered bool) *table {
 	if s.tables == nil {
 		s.tables = make(map[string]*table)
 	}
-	t := &table{gen: gen, members: make(map[string]entry)}
-	if ordered {
+	t := &table{gen: gen, members: make(map[string]entry), byMember: kind&ByMember != 0}
+	if kind&Ordered != 0 {
 		t.order, t.nodes = newSkiplist(), make(map[string]*skipNode)
 	}
 	s.tables[key] = t
@@ -88,13 +89,16 @@ func (s *shard) ensureTable(key string, gen uint64, ordered bool) *table {
 }
 
 func (s *shard) setMember(r memberRef, e entry, value []byte) {
-	t := s.ensureTable(r.key, r.gen, false)
+	t := s.ensureTable(r.key, r.gen, 0)
 	if old, ok := t.members[r.member]; ok {
 		s.live -= r.size(old)
 	}
 	t.members[r.member] = e
 	s.live += r.size(e)
 	if t.order != nil {
+		if t.byMember {
+			value = nil
+		}
 		if n := t.nodes[r.member]; n != nil {
 			t.order.delete(n.value, r.member)
 		}
