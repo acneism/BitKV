@@ -99,7 +99,7 @@ casketdb -addr 127.0.0.1:6383 -dir n3 -raft-id n3 -raft-peers n1=127.0.0.1:7001,
 | Section | Fields |
 | --- | --- |
 | Server | `redis_version` (7.2.0, for client compatibility), `casketdb_version`, `redis_mode`, `os`, `process_id`, `uptime_in_seconds` |
-| Clients | `connected_clients`, `maxclients` |
+| Clients | `connected_clients`, `maxclients`, `blocked_clients` |
 | Persistence | `aof_enabled`, `appendfsync`, `bitcask_logs`, `bitcask_data_files`, `bitcask_total_bytes`, `bitcask_live_bytes`, `bitcask_merges`, `bitcask_writes`, `bitcask_fsyncs` |
 | Stats | `total_connections_received`, `rejected_connections`, `total_commands_processed`, `expired_keys` |
 | Replication | `role` (`master` on the leader and on a single node, `slave` on followers), `raft_state`, `raft_term`, `raft_applied_index`, `raft_leader_id`, `raft_leader_addr`, `raft_membership` (`voter`, `learner` or `none`), `raft_voters`, `raft_learners` |

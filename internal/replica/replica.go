@@ -90,6 +90,7 @@ type Node struct {
 	fsm     *bitcaskFSM
 	flushMu sync.RWMutex
 	ready   atomic.Uint64
+	onEvent atomic.Pointer[func()]
 
 	reads    ReadMode
 	election time.Duration
@@ -186,7 +187,14 @@ func (n *Node) watch() {
 		if e.Ready && e.Leader == n.id {
 			n.ready.Store(e.Term)
 		}
+		if fn := n.onEvent.Load(); fn != nil {
+			(*fn)()
+		}
 	}
+}
+
+func (n *Node) WatchLeadership(fn func()) {
+	n.onEvent.Store(&fn)
 }
 
 func (n *Node) propose(term uint64, data []byte) (node.Proposal, error) {

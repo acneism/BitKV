@@ -48,7 +48,9 @@ type Server struct {
 	listeners map[net.Listener]struct{}
 	clients   map[*client]struct{}
 	closed    bool
+	done      chan struct{}
 	wg        sync.WaitGroup
+	blocked   blockedClients
 
 	nextID      atomic.Int64
 	connections atomic.Int64
@@ -94,11 +96,16 @@ func New(db *bitcask.DB, cfg Config) *Server {
 		started:   time.Now(),
 		listeners: make(map[net.Listener]struct{}),
 		clients:   make(map[*client]struct{}),
+		done:      make(chan struct{}),
 		throttle:  authThrottle{hosts: make(map[string]failures)},
 	}
 	s.pass.Store(&cfg.RequirePass)
 	s.users = newUsers(cfg.RequirePass)
 	db.WatchSystem(s.loadSystem)
+	db.WatchWrites(s.blocked.signal)
+	if cfg.Replica != nil {
+		cfg.Replica.WatchLeadership(s.blocked.wakeAll)
+	}
 	if db.System() != nil && cfg.RequirePass != "" {
 		logger.Warn("-requirepass is ignored: users are stored in the database; change the password with CONFIG SET requirepass or ACL SETUSER default")
 	}
@@ -136,7 +143,7 @@ func (s *Server) Serve(ln net.Listener) error {
 		}
 		backoff = 0
 		if s.cfg.Timeout > 0 {
-			conn = deadlineConn{conn, s.cfg.Timeout}
+			conn = &deadlineConn{Conn: conn, timeout: s.cfg.Timeout}
 		}
 		c := &client{
 			id:   s.nextID.Add(1),
@@ -167,6 +174,9 @@ func (s *Server) Serve(ln net.Listener) error {
 
 func (s *Server) Close() error {
 	s.mu.Lock()
+	if !s.closed {
+		close(s.done)
+	}
 	s.closed = true
 	for ln := range s.listeners {
 		ln.Close()
@@ -211,14 +221,17 @@ func IsLoopback(addr net.Addr) bool {
 type deadlineConn struct {
 	net.Conn
 	timeout time.Duration
+	paused  atomic.Bool
 }
 
-func (c deadlineConn) Read(b []byte) (int, error) {
-	_ = c.SetReadDeadline(time.Now().Add(c.timeout))
+func (c *deadlineConn) Read(b []byte) (int, error) {
+	if !c.paused.Load() {
+		_ = c.SetReadDeadline(time.Now().Add(c.timeout))
+	}
 	return c.Conn.Read(b)
 }
 
-func (c deadlineConn) Write(b []byte) (int, error) {
+func (c *deadlineConn) Write(b []byte) (int, error) {
 	_ = c.SetWriteDeadline(time.Now().Add(c.timeout))
 	return c.Conn.Write(b)
 }
@@ -275,7 +288,7 @@ func (s *Server) batchable(c *client, args [][]byte) (command, bool) {
 		return command{}, false
 	}
 	cmd, ok := lookup(args[0])
-	if !ok || cmd.kind != kindWrite || cmd.global || !cmd.validArity(len(args)) {
+	if !ok || cmd.kind != kindWrite || cmd.global || cmd.blocks || !cmd.validArity(len(args)) {
 		return command{}, false
 	}
 	return cmd, true
@@ -354,6 +367,9 @@ func (s *Server) execute(c *client, args [][]byte) {
 	start := s.clock()
 	r := s.run(c, cmd, args)
 	s.observe(start, 1)
+	if b, ok := r.(blockReply); ok {
+		r = s.block(c, cmd, args, b)
+	}
 	r.writeTo(c.w)
 }
 
@@ -375,6 +391,14 @@ func (s *Server) run(c *client, cmd command, args [][]byte) reply {
 		}
 		return r
 	}
+	r, err := s.call(cmd, args)
+	if err != nil {
+		return storageError(err)
+	}
+	return r
+}
+
+func (s *Server) call(cmd command, args [][]byte) (reply, error) {
 	var r reply
 	fn := func(tx *bitcask.Tx) error {
 		var err error
@@ -392,10 +416,7 @@ func (s *Server) run(c *client, cmd command, args [][]byte) reply {
 	} else {
 		err = s.update(scope, fn)
 	}
-	if err != nil {
-		return storageError(err)
-	}
-	return r
+	return r, err
 }
 
 func (s *Server) view(scope bitcask.Scope, fn func(tx *bitcask.Tx) error) error {

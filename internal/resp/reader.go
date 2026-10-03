@@ -44,6 +44,14 @@ func (r *Reader) Buffered() int {
 	return r.br.Buffered()
 }
 
+func (r *Reader) Watch() error {
+	for {
+		if _, err := r.br.Peek(r.br.Buffered() + 1); err != nil {
+			return err
+		}
+	}
+}
+
 func (r *Reader) Ready() bool {
 	b, _ := r.br.Peek(r.br.Buffered())
 	line, rest, ok := bytes.Cut(b, []byte{'\n'})

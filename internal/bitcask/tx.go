@@ -204,7 +204,17 @@ func (db *DB) update(scope Scope, fn func(tx *Tx) error) ([]waitPoint, error) {
 	if tx.err != nil {
 		return nil, tx.err
 	}
-	return tx.commit()
+	waits, err := tx.commit()
+	if fn := db.onWrite.Load(); fn != nil && err == nil {
+		for _, key := range tx.order {
+			(*fn)(key)
+		}
+	}
+	return waits, err
+}
+
+func (db *DB) WatchWrites(fn func(key string)) {
+	db.onWrite.Store(&fn)
 }
 
 func (db *DB) Apply(ops []Op, upTo uint64) error {

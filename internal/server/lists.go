@@ -26,6 +26,7 @@ var listCommands = map[string]command{
 	"lpos":      {arity: -3, kind: kindRead, keys: oneKey, acl: catList, tx: cmdLPos},
 	"lmove":     {arity: 5, kind: kindWrite, keys: keySpec{first: 1, last: 2, step: 1}, acl: catList, tx: cmdLMove},
 	"rpoplpush": {arity: 3, kind: kindWrite, keys: keySpec{first: 1, last: 2, step: 1}, acl: catList, tx: cmdRPopLPush},
+	"lmpop":     {arity: -4, kind: kindWrite, keys: keySpec{numkeys: 1}, acl: catList, tx: cmdLMPop},
 }
 
 type listView struct {
@@ -282,6 +283,17 @@ func pop(tx *bitcask.Tx, args [][]byte, left bool) (reply, error) {
 		}
 		return nilReply, nil
 	}
+	popped, err := l.popN(left, count)
+	if err != nil {
+		return nil, err
+	}
+	if len(args) == 3 {
+		return membersReply(popped), nil
+	}
+	return bulkReply(popped[0]), nil
+}
+
+func (l *listView) popN(left bool, count int64) ([][]byte, error) {
 	var popped [][]byte
 	for range min(count, l.len()) {
 		v, err := l.pop(left)
@@ -291,14 +303,34 @@ func pop(tx *bitcask.Tx, args [][]byte, left bool) (reply, error) {
 		popped = append(popped, v)
 	}
 	l.store()
-	if len(args) == 3 {
-		return membersReply(popped), nil
-	}
-	return bulkReply(popped[0]), nil
+	return popped, nil
 }
 
 func cmdLPop(tx *bitcask.Tx, args [][]byte) (reply, error) { return pop(tx, args, true) }
 func cmdRPop(tx *bitcask.Tx, args [][]byte) (reply, error) { return pop(tx, args, false) }
+
+func cmdLMPop(tx *bitcask.Tx, args [][]byte) (reply, error) {
+	p, bad := parseMPop(args, 1, "LEFT", "RIGHT")
+	if bad != nil {
+		return bad, nil
+	}
+	return lmpop(tx, p)
+}
+
+func lmpop(tx *bitcask.Tx, p mpop) (reply, error) {
+	for _, key := range p.keys {
+		l, bad, err := openList(tx, key)
+		if bad != nil || err != nil {
+			return bad, err
+		}
+		if l.len() == 0 {
+			continue
+		}
+		popped, err := l.popN(p.first, p.count)
+		return arrayReply{bulkReply(key), membersReply(popped)}, err
+	}
+	return nullArrayReply{}, nil
+}
 
 func cmdLLen(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	l, bad, err := openList(tx, args[1])

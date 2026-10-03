@@ -686,36 +686,15 @@ var (
 )
 
 func cmdZMPop(tx *bitcask.Tx, args [][]byte) (reply, error) {
-	numkeys, ok := parseInt(args[1])
-	if !ok || numkeys < 1 {
-		return errorReply("ERR numkeys should be greater than 0"), nil
+	p, bad := parseMPop(args, 1, "MIN", "MAX")
+	if bad != nil {
+		return bad, nil
 	}
-	if numkeys > int64(len(args)-3) {
-		return errorReply(errSyntax), nil
-	}
-	where := 2 + int(numkeys)
-	var highest bool
-	switch upper(args[where]) {
-	case "MIN":
-	case "MAX":
-		highest = true
-	default:
-		return errorReply(errSyntax), nil
-	}
-	count := int64(-1)
-	for j := where + 1; j < len(args); j++ {
-		if count != -1 || upper(args[j]) != "COUNT" || j+1 == len(args) {
-			return errorReply(errSyntax), nil
-		}
-		j++
-		if count, ok = parseInt(args[j]); !ok || count < 1 {
-			return errorReply("ERR count should be greater than 0"), nil
-		}
-	}
-	if count == -1 {
-		count = 1
-	}
-	for _, key := range args[2:where] {
+	return zmpop(tx, p)
+}
+
+func zmpop(tx *bitcask.Tx, p mpop) (reply, error) {
+	for _, key := range p.keys {
 		z, bad, err := openZSet(tx, key)
 		if bad != nil || err != nil {
 			return bad, err
@@ -723,7 +702,7 @@ func cmdZMPop(tx *bitcask.Tx, args [][]byte) (reply, error) {
 		if z.len() == 0 {
 			continue
 		}
-		items, err := z.pop(count, highest)
+		items, err := z.pop(p.count, !p.first)
 		pairs := make(arrayReply, len(items))
 		for i, it := range items {
 			pairs[i] = arrayReply{bulkReply(it.member), scoreReply(it.score)}

@@ -86,6 +86,7 @@ type command struct {
 	conn    connFunc
 	inMulti bool
 	noAuth  bool
+	blocks  bool
 }
 
 func (cmd command) validArity(n int) bool {
@@ -111,7 +112,7 @@ var commands map[string]command
 
 func init() {
 	commands = map[string]command{}
-	for _, table := range []map[string]command{serverCommands, keyCommands, stringCommands, bitCommands, hashCommands, setCommands, listCommands, zsetCommands, transactionCommands, raftCommands, aclCommands} {
+	for _, table := range []map[string]command{serverCommands, keyCommands, stringCommands, bitCommands, hashCommands, setCommands, listCommands, zsetCommands, blockingCommands, transactionCommands, raftCommands, aclCommands} {
 		maps.Copy(commands, table)
 	}
 	for id, name := range slices.Sorted(maps.Keys(commands)) {
@@ -433,6 +434,7 @@ func cmdInfo(s *Server, c *client, args [][]byte) reply {
 	line("# Clients")
 	line("connected_clients:%d", s.clientCount())
 	line("maxclients:%d", s.cfg.MaxClients)
+	line("blocked_clients:%d", s.blocked.count.Load())
 	line("")
 	line("# Persistence")
 	line("aof_enabled:1")

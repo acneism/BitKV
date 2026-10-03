@@ -64,6 +64,7 @@ type DB struct {
 	sysMu    sync.Mutex
 	system   []byte
 	onSystem func([]byte)
+	onWrite  atomic.Pointer[func(key string)]
 
 	stop     chan struct{}
 	stopOnce sync.Once

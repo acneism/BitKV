@@ -222,6 +222,40 @@ func (c *collection) store() {
 	}
 }
 
+type mpop struct {
+	keys  [][]byte
+	first bool
+	count int64
+}
+
+func parseMPop(args [][]byte, numIndex int, first, last string) (mpop, reply) {
+	numkeys, ok := parseInt(args[numIndex])
+	if !ok || numkeys < 1 {
+		return mpop{}, errorReply("ERR numkeys should be greater than 0")
+	}
+	if numkeys > int64(len(args)-numIndex-2) {
+		return mpop{}, errorReply(errSyntax)
+	}
+	where := numIndex + 1 + int(numkeys)
+	p := mpop{keys: args[numIndex+1 : where], count: 1}
+	switch upper(args[where]) {
+	case first:
+		p.first = true
+	case last:
+	default:
+		return mpop{}, errorReply(errSyntax)
+	}
+	for j, counted := where+1, false; j < len(args); j, counted = j+2, true {
+		if counted || upper(args[j]) != "COUNT" || j+1 == len(args) {
+			return mpop{}, errorReply(errSyntax)
+		}
+		if p.count, ok = parseInt(args[j+1]); !ok || p.count < 1 {
+			return mpop{}, errorReply("ERR count should be greater than 0")
+		}
+	}
+	return p, nil
+}
+
 func randomPicks(n int, count int64) []int {
 	switch {
 	case n == 0:

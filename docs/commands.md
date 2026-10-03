@@ -9,8 +9,8 @@ CasketDB implements the string subset of Redis 7 over RESP2. Semantics, replies 
 | Strings | GET, SET, SETNX, SETEX, PSETEX, GETSET, GETEX, GETDEL, MGET, MSET, MSETNX, APPEND, STRLEN, GETRANGE, SETRANGE, INCR, DECR, INCRBY, DECRBY, INCRBYFLOAT, LCS | SET accepts EX, PX, EXAT, PXAT, NX, XX, KEEPTTL, GET; GETEX accepts EX, PX, EXAT, PXAT, PERSIST; LCS accepts LEN, IDX, MINMATCHLEN, WITHMATCHLEN. MSET, MSETNX and INCR* are atomic |
 | Hashes | HSET, HMSET, HSETNX, HGET, HMGET, HDEL, HLEN, HEXISTS, HSTRLEN, HGETALL, HKEYS, HVALS, HINCRBY, HINCRBYFLOAT, HSCAN, HRANDFIELD | See [hashes](#hashes) |
 | Sets | SADD, SREM, SISMEMBER, SMISMEMBER, SMEMBERS, SCARD, SPOP, SRANDMEMBER, SMOVE, SINTER, SINTERSTORE, SINTERCARD, SUNION, SUNIONSTORE, SDIFF, SDIFFSTORE, SSCAN | See [sets](#sets) |
-| Lists | LPUSH, RPUSH, LPUSHX, RPUSHX, LPOP, RPOP, LLEN, LINDEX, LRANGE, LSET, LREM, LTRIM, LINSERT, LPOS, LMOVE, RPOPLPUSH | See [lists](#lists) |
-| Sorted sets | ZADD, ZINCRBY, ZREM, ZSCORE, ZMSCORE, ZCARD, ZCOUNT, ZLEXCOUNT, ZRANK, ZREVRANK, ZRANGE, ZRANGESTORE, ZREVRANGE, ZRANGEBYSCORE, ZREVRANGEBYSCORE, ZRANGEBYLEX, ZREVRANGEBYLEX, ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX, ZPOPMIN, ZPOPMAX, ZMPOP, ZRANDMEMBER, ZSCAN, ZUNION, ZINTER, ZDIFF, ZINTERCARD, ZUNIONSTORE, ZINTERSTORE, ZDIFFSTORE | See [sorted sets](#sorted-sets) |
+| Lists | LPUSH, RPUSH, LPUSHX, RPUSHX, LPOP, RPOP, LMPOP, LLEN, LINDEX, LRANGE, LSET, LREM, LTRIM, LINSERT, LPOS, LMOVE, RPOPLPUSH, BLPOP, BRPOP, BLMPOP, BLMOVE, BRPOPLPUSH | See [lists](#lists) and [blocking commands](#blocking-commands) |
+| Sorted sets | ZADD, ZINCRBY, ZREM, ZSCORE, ZMSCORE, ZCARD, ZCOUNT, ZLEXCOUNT, ZRANK, ZREVRANK, ZRANGE, ZRANGESTORE, ZREVRANGE, ZRANGEBYSCORE, ZREVRANGEBYSCORE, ZRANGEBYLEX, ZREVRANGEBYLEX, ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX, ZPOPMIN, ZPOPMAX, ZMPOP, ZRANDMEMBER, ZSCAN, ZUNION, ZINTER, ZDIFF, ZINTERCARD, ZUNIONSTORE, ZINTERSTORE, ZDIFFSTORE, BZPOPMIN, BZPOPMAX, BZMPOP | See [sorted sets](#sorted-sets) and [blocking commands](#blocking-commands) |
 | Bitmaps | SETBIT, GETBIT, BITCOUNT, BITPOS, BITOP, BITFIELD, BITFIELD_RO | Bitmaps are strings. BITCOUNT and BITPOS accept BYTE and BIT ranges; BITOP supports AND, OR, XOR and NOT; BITFIELD supports GET, SET, INCRBY and OVERFLOW WRAP, SAT or FAIL. A bit offset is below 2³² |
 | Keys | DEL, UNLINK, EXISTS, TYPE, OBJECT, KEYS, SCAN, DBSIZE | Glob patterns `*`, `?`, `[a-z]`, `[^x]`, `\`. SCAN accepts MATCH, COUNT, TYPE. OBJECT supports ENCODING only: `int`, `embstr` or `raw` for a string, as in Redis |
 | Expiry | EXPIRE, PEXPIRE, EXPIREAT, PEXPIREAT, TTL, PTTL, PERSIST | NX, XX, GT, LT. A time in the past deletes the key. TTL returns −2 for a missing key and −1 for a key without expiry |
@@ -45,7 +45,7 @@ A set uses the same two encodings as a hash, with the same thresholds: up to 128
 
 ### Lists
 
-Up to 128 elements of up to 64 bytes a list is one value (`listpack`); beyond that each element is a record of its own, numbered by its position (`quicklist`). Pushing, popping, LINDEX, LSET and LRANGE then touch only the elements they name. LINSERT, LREM, and LTRIM that keeps the smaller part of a list, rewrite the elements that stay. A list never goes back to `listpack`. Blocking commands (BLPOP and the like) and LMPOP are not supported yet.
+Up to 128 elements of up to 64 bytes a list is one value (`listpack`); beyond that each element is a record of its own, numbered by its position (`quicklist`). Pushing, popping, LINDEX, LSET and LRANGE then touch only the elements they name. LINSERT, LREM, and LTRIM that keeps the smaller part of a list, rewrite the elements that stay. A list never goes back to `listpack`.
 
 ### Sorted sets
 
@@ -55,9 +55,16 @@ Differences from Redis:
 
 - Scores are 64-bit floats, as in Redis, and replies give the shortest decimal form that reads back as the same number, as Redis 7.2 and later do: `0.1`, `1e-05`, `1e+20`. A score of `-0` is stored as `0`.
 - ZSCAN returns every matching member in one reply with cursor `0`. ZRANDMEMBER reads every member of the set, and with a count accepts at most 16,777,216 members either way.
-- The blocking commands BZPOPMIN, BZPOPMAX and BZMPOP are not supported yet.
 
 ZUNION, ZINTER, ZDIFF, ZINTERCARD and their STORE forms accept sets as inputs, with a score of 1 for each member, as Redis does.
+
+### Blocking commands
+
+BLPOP, BRPOP, BLMPOP, BLMOVE, BRPOPLPUSH, BZPOPMIN, BZPOPMAX and BZMPOP wait for an element when every key they name is empty, as in Redis. The timeout is in seconds and may have a fraction; `0` waits forever. Clients waiting on the same key are served in the order they started to wait, and a client that waits on several keys takes from the first of them, in the order it named them, that has an element. Inside MULTI these commands do not wait: with nothing to pop they reply as if the timeout had passed. A waiting client is not closed by `-timeout`, and `INFO` counts waiting clients in `blocked_clients`.
+
+A client that disconnects while it waits stops waiting at once, so it cannot take an element no one will read. CasketDB notices the disconnect by watching the connection; if the client sends more than 16 KB of further commands while it waits, CasketDB stops watching, and that client keeps its place until its timeout or until it is served.
+
+In a cluster only the leader serves these commands; followers answer `READONLY`. When the node a client waits on stops being the leader, the client gets `-UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)`, as Redis replies when a primary becomes a replica, and should retry on the new leader.
 
 ### Numbers and string sizes
 
@@ -94,7 +101,7 @@ Users work as in Redis 6 and later. `default` always exists; `CONFIG SET require
 
 Users are kept in the file `SYSTEM` in the data directory and survive restarts; once it exists, `-requirepass` is ignored at start, with a warning. In a cluster a change to users is a Raft entry: run it on the leader, a follower answers `READONLY`, and every node applies it and includes it in snapshots. FLUSHDB does not touch users.
 
-`ACL SETUSER` understands `on`, `off`, `>password`, `<password`, `#hash`, `!hash`, `nopass`, `resetpass`, `~pattern`, `allkeys`, `resetkeys`, `+command`, `-command`, `+@category`, `-@category`, `allcommands`, `nocommands` and `reset`. A new user starts `off`, without passwords, keys or commands. The categories are `keyspace`, `read`, `write`, `string`, `bitmap`, `hash`, `set`, `list`, `sortedset`, `fast`, `slow`, `admin`, `dangerous`, `connection` and `transaction`, assigned as in Redis; `RAFT` is `@admin` and `@dangerous`. A denied command answers `NOPERM`, and inside MULTI it aborts EXEC. `ACL LOG [count|RESET]` lists the latest denials of commands, keys and logins on this node, newest first, up to 128; a repeat within a minute adds to the count of its entry.
+`ACL SETUSER` understands `on`, `off`, `>password`, `<password`, `#hash`, `!hash`, `nopass`, `resetpass`, `~pattern`, `allkeys`, `resetkeys`, `+command`, `-command`, `+@category`, `-@category`, `allcommands`, `nocommands` and `reset`. A new user starts `off`, without passwords, keys or commands. The categories are `keyspace`, `read`, `write`, `string`, `bitmap`, `hash`, `set`, `list`, `sortedset`, `blocking`, `fast`, `slow`, `admin`, `dangerous`, `connection` and `transaction`, assigned as in Redis; `RAFT` is `@admin` and `@dangerous`. A denied command answers `NOPERM`, and inside MULTI it aborts EXEC. `ACL LOG [count|RESET]` lists the latest denials of commands, keys and logins on this node, newest first, up to 128; a repeat within a minute adds to the count of its entry.
 
 Differences from Redis:
 
