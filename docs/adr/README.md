@@ -15,5 +15,6 @@ Each record explains one decision that shapes CasketDB: the context, what was de
 | [9](0009-users-in-system-file.md) | Users in a replicated SYSTEM file | 2026-10-01 |
 | [10](0010-value-types.md) | Value types in records, collections as one value first | 2026-10-02 |
 | [11](0011-collection-members.md) | Members of large collections as records, tied by a generation | 2026-10-02 |
+| [12](0012-ordered-members.md) | An ordered index of members in the engine | 2026-10-03 |
 
 A new record gets the next number and the sections Context, Decision and Consequences. A record is not edited when the decision changes: a new record replaces it, and the old one says so on its status line.

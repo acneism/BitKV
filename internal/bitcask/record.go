@@ -29,7 +29,10 @@ const (
 
 type Kind byte
 
-const Table Kind = 0x80
+const (
+	Table   Kind = 0x80
+	Ordered Kind = 0x40
+)
 
 type memberRef struct {
 	key    string

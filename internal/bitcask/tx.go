@@ -476,6 +476,61 @@ func (tx *Tx) Members(key string, values bool, fn func(member string, value []by
 	return nil
 }
 
+func (tx *Tx) orderedMembers(key string) (*orderedView, error) {
+	gen, ok, err := tx.gen(key)
+	if err != nil || !ok {
+		return nil, err
+	}
+	_, s := tx.shardFor(key)
+	if s == nil {
+		return nil, ErrNotLocked
+	}
+	changed := make(map[string]pendingOp)
+	if tx.term != 0 {
+		for r, op := range s.proposedMembers {
+			if r.key == key && r.gen == gen && op.term == tx.term {
+				changed[r.member] = op.pendingOp
+				tx.depends = max(tx.depends, op.id)
+			}
+		}
+	}
+	for r, op := range tx.pendingMembers {
+		if r.key == key && r.gen == gen {
+			changed[r.member] = op
+		}
+	}
+	t := s.tables[key]
+	switch {
+	case t == nil || t.gen != gen:
+		return newOrderedView(newSkiplist(), nil, changed), nil
+	case t.order != nil:
+		return newOrderedView(t.order, t.nodes, changed), nil
+	}
+	sl := newSkiplist()
+	err = tx.Members(key, true, func(member string, value []byte) bool {
+		sl.insert(value, member)
+		return true
+	})
+	return newOrderedView(sl, nil, nil), err
+}
+
+func (tx *Tx) MemberCount(key string, below func(value []byte, member string) bool) (int, error) {
+	v, err := tx.orderedMembers(key)
+	if err != nil || v == nil {
+		return 0, err
+	}
+	return v.count(below), nil
+}
+
+func (tx *Tx) MemberRange(key string, from int, reverse bool, fn func(member string, value []byte) bool) error {
+	v, err := tx.orderedMembers(key)
+	if err != nil || v == nil {
+		return err
+	}
+	v.walk(from, reverse, fn)
+	return nil
+}
+
 func (tx *Tx) stageMember(r memberRef, op pendingOp) {
 	if tx.pendingMembers == nil {
 		tx.pendingMembers = make(map[memberRef]pendingOp)
@@ -887,7 +942,9 @@ func (gb *groupBatch) apply(tx *Tx) {
 		off := b.off + gb.offsets[i]
 		stored := storedSize(op.kind, op.value)
 		s.set(key, entry{fileID: b.df.id, offset: off, valueSize: uint32(stored), expireAt: op.expireAt})
-		if gen, ok := tableGen(op.kind, op.value); !ok || (s.tables[key] != nil && s.tables[key].gen != gen) {
+		if gen, ok := tableGen(op.kind, op.value); ok {
+			s.ensureTable(key, gen, op.kind&Ordered != 0)
+		} else {
 			s.dropTable(key)
 		}
 		if written {
@@ -908,7 +965,7 @@ func (gb *groupBatch) apply(tx *Tx) {
 			continue
 		}
 		off := b.off + gb.memberOffsets[j]
-		s.setMember(r, entry{fileID: b.df.id, offset: off, valueSize: uint32(len(op.value))})
+		s.setMember(r, entry{fileID: b.df.id, offset: off, valueSize: uint32(len(op.value))}, op.value)
 		if written {
 			continue
 		}

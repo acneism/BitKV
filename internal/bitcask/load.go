@@ -85,23 +85,34 @@ func (db *DB) load() error {
 }
 
 func (st *loadState) attachMembers() error {
-	gens := make(map[string]uint64)
+	tables := make(map[string]*table)
 	for r, e := range st.members {
 		s := st.g.db.kd.shard(r.key)
-		gen, known := gens[r.key]
+		t, known := tables[r.key]
 		if !known {
 			if main, ok := s.m[r.key]; ok {
 				v, kind, err := st.g.readEntry(s, r.key, main)
 				if err != nil {
 					return err
 				}
-				gen, _ = tableGen(kind, v)
+				if gen, ok := tableGen(kind, v); ok {
+					t = s.ensureTable(r.key, gen, kind&Ordered != 0)
+				}
 			}
-			gens[r.key] = gen
+			tables[r.key] = t
 		}
-		if gen != 0 && gen == r.gen {
-			s.setMember(r, e)
+		if t == nil || t.gen != r.gen {
+			continue
 		}
+		var value []byte
+		if t.order != nil {
+			v, err := st.g.readMember(s, r, e)
+			if err != nil {
+				return err
+			}
+			value = v
+		}
+		s.setMember(r, e, value)
 	}
 	st.members, st.touchedMembers = nil, nil
 	return nil

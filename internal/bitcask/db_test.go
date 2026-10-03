@@ -1156,6 +1156,77 @@ func TestMembers(t *testing.T) {
 	checkAcrossRestart(t, db, dir, o, check)
 }
 
+func inOrder(t *testing.T, tx *Tx, key string, reverse bool) []string {
+	t.Helper()
+	n, err := tx.MemberCount(key, func([]byte, string) bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	from := 0
+	if reverse {
+		from = n - 1
+	}
+	var got []string
+	if err := tx.MemberRange(key, from, reverse, func(m string, v []byte) bool {
+		got = append(got, m+"="+string(v))
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func TestOrderedMembers(t *testing.T) {
+	dir := t.TempDir()
+	o := testOptions()
+	db := mustOpen(t, dir, o)
+	update := func(fn func(tx *Tx)) {
+		t.Helper()
+		if err := db.Update(Keys("z"), func(tx *Tx) error { fn(tx); return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	update(func(tx *Tx) {
+		tx.PutKind("z", Table|Ordered|3, tableValue(4), 0)
+		for _, m := range []string{"c2", "a2", "b1", "d3"} {
+			tx.PutMember("z", m[:1], []byte(m[1:]))
+		}
+		if got := inOrder(t, tx, "z", false); !slices.Equal(got, []string{"b=1", "a=2", "c=2", "d=3"}) {
+			t.Errorf("order inside the creating transaction = %v", got)
+		}
+	})
+	update(func(tx *Tx) {
+		tx.PutKind("z", Table|Ordered|3, tableValue(4), 0)
+		tx.PutMember("z", "d", []byte("0"))
+		tx.DeleteMember("z", "c")
+	})
+	check := func(db *DB) {
+		t.Helper()
+		if err := db.View(Keys("z"), func(tx *Tx) error {
+			if got := inOrder(t, tx, "z", false); !slices.Equal(got, []string{"d=0", "b=1", "a=2"}) {
+				t.Errorf("forward order = %v", got)
+			}
+			if got := inOrder(t, tx, "z", true); !slices.Equal(got, []string{"a=2", "b=1", "d=0"}) {
+				t.Errorf("reverse order = %v", got)
+			}
+			if n, err := tx.MemberCount("z", func(v []byte, _ string) bool { return string(v) < "2" }); n != 2 || err != nil {
+				t.Errorf("members below 2 = %d, %v", n, err)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check(db)
+	mustClose(t, db)
+	db = mustOpen(t, dir, o)
+	check(db)
+	if err := db.Merge(); err != nil {
+		t.Fatal(err)
+	}
+	checkAcrossRestart(t, db, dir, o, check)
+}
+
 func TestProposedMembers(t *testing.T) {
 	db := mustOpen(t, t.TempDir(), testOptions())
 	defer mustClose(t, db)
@@ -1182,6 +1253,15 @@ func TestProposedMembers(t *testing.T) {
 	}, publish)
 	if err != nil || depends != 1 {
 		t.Fatalf("depends %d, %v", depends, err)
+	}
+	depends, err = db.Propose(Keys("p"), 1, func(tx *Tx) error {
+		if got := inOrder(t, tx, "p", false); !slices.Equal(got, []string{"m=v"}) {
+			t.Errorf("proposed members in order = %v", got)
+		}
+		return nil
+	}, publish)
+	if err != nil || depends != 1 {
+		t.Fatalf("depends of an ordered read %d, %v", depends, err)
 	}
 	if err := db.Apply(published, 1); err != nil {
 		t.Fatal(err)
