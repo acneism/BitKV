@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -49,9 +50,8 @@ func TestGeo(t *testing.T) {
 	c.expect(int64(3), "GEOSEARCHSTORE", "key2", "Sic", "FROMLONLAT", "15", "37", "BYBOX", "400", "400", "km", "ASC", "COUNT", "3", "STOREDIST")
 	stored, _ := c.do("ZRANGE", "key2", "0", "-1", "WITHSCORES").([]any)
 	for i, want := range []float64{56.441257870158204, 190.44242984775784, 279.7403417843143} {
-		var got float64
-		fmt.Sscan(stored[2*i+1].(string), &got)
-		if stored[2*i] != []string{"Catania", "Palermo", "edge2"}[i] || math.Abs(got-want) > 1e-9 {
+		got, err := strconv.ParseFloat(stored[2*i+1].(string), 64)
+		if err != nil || stored[2*i] != []string{"Catania", "Palermo", "edge2"}[i] || math.Abs(got-want) > 1e-9 {
 			t.Fatalf("STOREDIST stored %v", stored)
 		}
 	}
@@ -103,9 +103,11 @@ func TestGeoSearchFindsEveryPoint(t *testing.T) {
 	z := map[string][2]float64{}
 	for i := range 1500 {
 		pos, _ := c.do("GEOPOS", "points", fmt.Sprint("p", i)).([]any)
-		var lon, lat float64
-		fmt.Sscan(pos[0].([]any)[0].(string), &lon)
-		fmt.Sscan(pos[0].([]any)[1].(string), &lat)
+		lon, err1 := strconv.ParseFloat(pos[0].([]any)[0].(string), 64)
+		lat, err2 := strconv.ParseFloat(pos[0].([]any)[1].(string), 64)
+		if err1 != nil || err2 != nil {
+			t.Fatalf("GEOPOS p%d = %v", i, pos)
+		}
 		z[fmt.Sprint("p", i)] = [2]float64{lon, lat}
 	}
 	for round := range 40 {

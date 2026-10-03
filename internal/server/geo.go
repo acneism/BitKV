@@ -519,7 +519,7 @@ func geoSearchCommand(flags int) txFunc {
 		case flags&geoSearchStore != 0:
 			base, store = 3, args[1]
 		}
-		var withDist, withHash, withCoord, any, storeDist, fromMember, fromLonLat, byRadius, byBox bool
+		var withDist, withHash, withCoord, stopEarly, storeDist, fromMember, fromLonLat, byRadius, byBox bool
 		var order int
 		var count int64
 		for i := base; i < len(args); i++ {
@@ -531,7 +531,7 @@ func geoSearchCommand(flags int) txFunc {
 			case opt == "WITHCOORD":
 				withCoord = true
 			case opt == "ANY":
-				any = true
+				stopEarly = true
 			case opt == "ASC":
 				order = 1
 			case opt == "DESC":
@@ -592,18 +592,18 @@ func geoSearchCommand(flags int) txFunc {
 			return errorReply("ERR exactly one of FROMMEMBER or FROMLONLAT can be specified for " + string(args[0])), nil
 		case flags&geoSearch != 0 && !byRadius && !byBox:
 			return errorReply("ERR exactly one of BYRADIUS and BYBOX can be specified for " + string(args[0])), nil
-		case any && count == 0:
+		case stopEarly && count == 0:
 			return errorReply("ERR the ANY argument requires COUNT argument"), nil
 		case !exists && store != nil:
 			return storeZSet(tx, store, nil)
 		case !exists:
 			return arrayReply{}, nil
 		}
-		if count != 0 && order == 0 && !any {
+		if count != 0 && order == 0 && !stopEarly {
 			order = 1
 		}
 		limit := 0
-		if any {
+		if stopEarly {
 			limit = int(count)
 		}
 		points, err := z.geoPoints(&s, limit)
