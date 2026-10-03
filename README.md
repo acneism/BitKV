@@ -103,4 +103,4 @@ Bug reports and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBU
 
 ## License
 
-Apache License 2.0, see [LICENSE](LICENSE).
+Apache License 2.0, see [LICENSE](LICENSE). Parts follow algorithms of Redis under its BSD license; see [NOTICE](NOTICE).
