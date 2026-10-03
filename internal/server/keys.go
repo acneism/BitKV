@@ -62,7 +62,11 @@ func cmdType(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	if err != nil || !found {
 		return statusReply("none"), err
 	}
-	return statusReply(typeNames[kind&^bitcask.Table]), nil
+	return statusReply(typeNames[baseKind(kind)]), nil
+}
+
+func baseKind(kind bitcask.Kind) bitcask.Kind {
+	return kind &^ (bitcask.Table | bitcask.Ordered)
 }
 
 func cmdObject(tx *bitcask.Tx, args [][]byte) (reply, error) {
@@ -75,6 +79,9 @@ func cmdObject(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	}
 	if kind == typeList|bitcask.Table {
 		return bulkReply("quicklist"), nil
+	}
+	if kind&bitcask.Ordered != 0 {
+		return bulkReply("skiplist"), nil
 	}
 	if kind&bitcask.Table != 0 {
 		return bulkReply("hashtable"), nil
@@ -133,7 +140,7 @@ func cmdScan(tx *bitcask.Tx, args [][]byte) (reply, error) {
 			count = int(min(n, math.MaxInt32))
 		case "TYPE":
 			name := strings.ToLower(string(args[i+1]))
-			ofKind = func(k bitcask.Kind) bool { return typeNames[k&^bitcask.Table] == name }
+			ofKind = func(k bitcask.Kind) bool { return typeNames[baseKind(k)] == name }
 		default:
 			return errorReply(errSyntax), nil
 		}

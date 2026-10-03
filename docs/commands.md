@@ -10,6 +10,7 @@ CasketDB implements the string subset of Redis 7 over RESP2. Semantics, replies 
 | Hashes | HSET, HMSET, HSETNX, HGET, HMGET, HDEL, HLEN, HEXISTS, HSTRLEN, HGETALL, HKEYS, HVALS, HINCRBY, HINCRBYFLOAT, HSCAN, HRANDFIELD | See [hashes](#hashes) |
 | Sets | SADD, SREM, SISMEMBER, SMISMEMBER, SMEMBERS, SCARD, SPOP, SRANDMEMBER, SMOVE, SINTER, SINTERSTORE, SINTERCARD, SUNION, SUNIONSTORE, SDIFF, SDIFFSTORE, SSCAN | See [sets](#sets) |
 | Lists | LPUSH, RPUSH, LPUSHX, RPUSHX, LPOP, RPOP, LLEN, LINDEX, LRANGE, LSET, LREM, LTRIM, LINSERT, LPOS, LMOVE, RPOPLPUSH | See [lists](#lists) |
+| Sorted sets | ZADD, ZINCRBY, ZREM, ZSCORE, ZMSCORE, ZCARD, ZCOUNT, ZLEXCOUNT, ZRANK, ZREVRANK, ZRANGE, ZRANGESTORE, ZREVRANGE, ZRANGEBYSCORE, ZREVRANGEBYSCORE, ZRANGEBYLEX, ZREVRANGEBYLEX, ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX, ZPOPMIN, ZPOPMAX, ZMPOP, ZRANDMEMBER, ZSCAN, ZUNION, ZINTER, ZDIFF, ZINTERCARD, ZUNIONSTORE, ZINTERSTORE, ZDIFFSTORE | See [sorted sets](#sorted-sets) |
 | Bitmaps | SETBIT, GETBIT, BITCOUNT, BITPOS, BITOP, BITFIELD, BITFIELD_RO | Bitmaps are strings. BITCOUNT and BITPOS accept BYTE and BIT ranges; BITOP supports AND, OR, XOR and NOT; BITFIELD supports GET, SET, INCRBY and OVERFLOW WRAP, SAT or FAIL. A bit offset is below 2³² |
 | Keys | DEL, UNLINK, EXISTS, TYPE, OBJECT, KEYS, SCAN, DBSIZE | Glob patterns `*`, `?`, `[a-z]`, `[^x]`, `\`. SCAN accepts MATCH, COUNT, TYPE. OBJECT supports ENCODING only: `int`, `embstr` or `raw` for a string, as in Redis |
 | Expiry | EXPIRE, PEXPIRE, EXPIREAT, PEXPIREAT, TTL, PTTL, PERSIST | NX, XX, GT, LT. A time in the past deletes the key. TTL returns −2 for a missing key and −1 for a key without expiry |
@@ -23,7 +24,7 @@ CasketDB implements the string subset of Redis 7 over RESP2. Semantics, replies 
 
 ### Data types
 
-Strings, including the bitmap commands, hashes, sets and lists. Sorted sets, streams, HyperLogLog, geo, pub/sub, Lua and Functions are not implemented.
+Strings, including the bitmap commands, hashes, sets, lists and sorted sets. Streams, HyperLogLog, geo, pub/sub, Lua and Functions are not implemented.
 
 ### Hashes
 
@@ -44,7 +45,19 @@ A set uses the same two encodings as a hash, with the same thresholds: up to 128
 
 ### Lists
 
-Up to 128 elements of up to 64 bytes a list is one value (`listpack`); beyond that each element is a record of its own, numbered by its position (`quicklist`). Pushing, popping, LINDEX, LSET and LRANGE then touch only the elements they name. LINSERT, LREM, and LTRIM that keeps the smaller part of a list, rewrite the elements that stay. A list never goes back to `listpack`. Blocking commands (BLPOP and the like) and LMPOP are not supported yet. `TYPE` returns `string` or `none`.
+Up to 128 elements of up to 64 bytes a list is one value (`listpack`); beyond that each element is a record of its own, numbered by its position (`quicklist`). Pushing, popping, LINDEX, LSET and LRANGE then touch only the elements they name. LINSERT, LREM, and LTRIM that keeps the smaller part of a list, rewrite the elements that stay. A list never goes back to `listpack`. Blocking commands (BLPOP and the like) and LMPOP are not supported yet.
+
+### Sorted sets
+
+Up to 128 members of up to 64 bytes a sorted set is one value (`listpack`), sorted when a command needs the order. Beyond that each member is a record of its own, and the members are also kept in score order in a skiplist in memory (`skiplist`), so ranks, counts and ranges take O(log n) plus the members returned. A sorted set never goes back to `listpack`. See [ADR 12](adr/0012-ordered-members.md).
+
+Differences from Redis:
+
+- Scores are 64-bit floats, as in Redis, and replies give the shortest decimal form that reads back as the same number, as Redis 7.2 and later do: `0.1`, `1e-05`, `1e+20`. A score of `-0` is stored as `0`.
+- ZSCAN returns every matching member in one reply with cursor `0`. ZRANDMEMBER reads every member of the set, and with a count accepts at most 16,777,216 members either way.
+- The blocking commands BZPOPMIN, BZPOPMAX and BZMPOP are not supported yet.
+
+ZUNION, ZINTER, ZDIFF, ZINTERCARD and their STORE forms accept sets as inputs, with a score of 1 for each member, as Redis does.
 
 ### Numbers and string sizes
 
@@ -81,7 +94,7 @@ Users work as in Redis 6 and later. `default` always exists; `CONFIG SET require
 
 Users are kept in the file `SYSTEM` in the data directory and survive restarts; once it exists, `-requirepass` is ignored at start, with a warning. In a cluster a change to users is a Raft entry: run it on the leader, a follower answers `READONLY`, and every node applies it and includes it in snapshots. FLUSHDB does not touch users.
 
-`ACL SETUSER` understands `on`, `off`, `>password`, `<password`, `#hash`, `!hash`, `nopass`, `resetpass`, `~pattern`, `allkeys`, `resetkeys`, `+command`, `-command`, `+@category`, `-@category`, `allcommands`, `nocommands` and `reset`. A new user starts `off`, without passwords, keys or commands. The categories are `keyspace`, `read`, `write`, `string`, `bitmap`, `hash`, `set`, `list`, `fast`, `slow`, `admin`, `dangerous`, `connection` and `transaction`, assigned as in Redis; `RAFT` is `@admin` and `@dangerous`. A denied command answers `NOPERM`, and inside MULTI it aborts EXEC. `ACL LOG [count|RESET]` lists the latest denials of commands, keys and logins on this node, newest first, up to 128; a repeat within a minute adds to the count of its entry.
+`ACL SETUSER` understands `on`, `off`, `>password`, `<password`, `#hash`, `!hash`, `nopass`, `resetpass`, `~pattern`, `allkeys`, `resetkeys`, `+command`, `-command`, `+@category`, `-@category`, `allcommands`, `nocommands` and `reset`. A new user starts `off`, without passwords, keys or commands. The categories are `keyspace`, `read`, `write`, `string`, `bitmap`, `hash`, `set`, `list`, `sortedset`, `fast`, `slow`, `admin`, `dangerous`, `connection` and `transaction`, assigned as in Redis; `RAFT` is `@admin` and `@dangerous`. A denied command answers `NOPERM`, and inside MULTI it aborts EXEC. `ACL LOG [count|RESET]` lists the latest denials of commands, keys and logins on this node, newest first, up to 128; a repeat within a minute adds to the count of its entry.
 
 Differences from Redis:
 

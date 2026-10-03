@@ -37,9 +37,10 @@ const (
 	catHash
 	catSet
 	catList
+	catSortedSet
 )
 
-var categoryNames = []string{"keyspace", "read", "write", "string", "fast", "slow", "admin", "dangerous", "connection", "transaction", "bitmap", "hash", "set", "list"}
+var categoryNames = []string{"keyspace", "read", "write", "string", "fast", "slow", "admin", "dangerous", "connection", "transaction", "bitmap", "hash", "set", "list", "sortedset"}
 
 func (cmd command) categories() category {
 	c := cmd.acl

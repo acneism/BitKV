@@ -99,13 +99,20 @@ func openCollection(tx *bitcask.Tx, key []byte, typ bitcask.Kind) (*collection, 
 	case !found:
 	case kind == typ:
 		c.blob = value
-	case kind == typ|bitcask.Table && len(value) >= 8:
+	case kind == c.tableKind() && len(value) >= 8:
 		n, _ := binary.Uvarint(value[8:])
 		c.table, c.gen, c.count = true, binary.LittleEndian.Uint64(value), int(n)
 	default:
 		return nil, errorReply(errWrongType), nil
 	}
 	return c, nil, nil
+}
+
+func (c *collection) tableKind() bitcask.Kind {
+	if c.typ == typeZSet {
+		return c.typ | bitcask.Table | bitcask.Ordered
+	}
+	return c.typ | bitcask.Table
 }
 
 func (c *collection) len() int {
@@ -192,7 +199,7 @@ func (c *collection) convert() {
 	c.gen = newGen()
 	expireAt, _ := c.tx.ExpireAt(c.key)
 	c.table = true
-	c.tx.PutKind(c.key, c.typ|bitcask.Table, c.meta(), expireAt)
+	c.tx.PutKind(c.key, c.tableKind(), c.meta(), expireAt)
 	c.blob.each(func(field, value []byte) {
 		c.tx.PutMember(c.key, string(field), value)
 		c.count++
@@ -209,7 +216,7 @@ func (c *collection) store() {
 	case c.len() == 0:
 		c.tx.Delete(c.key)
 	case c.table:
-		c.tx.PutKind(c.key, c.typ|bitcask.Table, c.meta(), expireAt)
+		c.tx.PutKind(c.key, c.tableKind(), c.meta(), expireAt)
 	default:
 		c.tx.PutKind(c.key, c.typ, c.blob, expireAt)
 	}

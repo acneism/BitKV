@@ -316,7 +316,11 @@ func randomCount(args [][]byte) (int64, reply) {
 }
 
 func cmdHRandField(tx *bitcask.Tx, args [][]byte) (reply, error) {
-	if len(args) > 4 || (len(args) == 4 && upper(args[3]) != "WITHVALUES") {
+	return randomMembers(tx, args, "WITHVALUES", openHash, func(v []byte) reply { return bulkReply(v) })
+}
+
+func randomMembers(tx *bitcask.Tx, args [][]byte, option string, open func(*bitcask.Tx, []byte) (*collection, reply, error), format func([]byte) reply) (reply, error) {
+	if len(args) > 4 || (len(args) == 4 && upper(args[3]) != option) {
 		return errorReply(errSyntax), nil
 	}
 	var count int64
@@ -326,12 +330,12 @@ func cmdHRandField(tx *bitcask.Tx, args [][]byte) (reply, error) {
 			return bad, nil
 		}
 	}
-	h, bad, err := openHash(tx, args[1])
+	c, bad, err := open(tx, args[1])
 	if bad != nil || err != nil {
 		return bad, err
 	}
 	var fields, values [][]byte
-	if err := h.each(len(args) == 4, func(field, value []byte) {
+	if err := c.each(len(args) == 4, func(field, value []byte) {
 		fields, values = append(fields, field), append(values, value)
 	}); err != nil {
 		return nil, err
@@ -346,7 +350,7 @@ func cmdHRandField(tx *bitcask.Tx, args [][]byte) (reply, error) {
 	for _, i := range randomPicks(len(fields), count) {
 		out = append(out, bulkReply(fields[i]))
 		if len(args) == 4 {
-			out = append(out, bulkReply(values[i]))
+			out = append(out, format(values[i]))
 		}
 	}
 	return out, nil
