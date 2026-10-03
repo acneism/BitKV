@@ -331,12 +331,18 @@ func zadd(tx *bitcask.Tx, key []byte, pairs [][]byte, o zaddOptions) (reply, err
 		return errorReply("ERR INCR option supports a single increment-element pair"), nil
 	}
 	scores := make([]float64, len(pairs)/2)
+	members := make([][]byte, len(pairs)/2)
 	for j := range scores {
 		var ok bool
 		if scores[j], ok = parseFloat(pairs[2*j]); !ok {
 			return errorReply(errNotFloat), nil
 		}
+		members[j] = pairs[2*j+1]
 	}
+	return addScores(tx, key, scores, members, o)
+}
+
+func addScores(tx *bitcask.Tx, key []byte, scores []float64, members [][]byte, o zaddOptions) (reply, error) {
 	z, bad, err := openZSet(tx, key)
 	if bad != nil || err != nil {
 		return bad, err
@@ -344,7 +350,7 @@ func zadd(tx *bitcask.Tx, key []byte, pairs [][]byte, o zaddOptions) (reply, err
 	added, updated, processed := 0, 0, 0
 	var result float64
 	for j, score := range scores {
-		member := pairs[2*j+1]
+		member := members[j]
 		value, found, err := z.get(member)
 		if err != nil {
 			return nil, err

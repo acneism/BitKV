@@ -13,6 +13,7 @@ CasketDB implements the string subset of Redis 7 over RESP2. Semantics, replies 
 | Sorted sets | ZADD, ZINCRBY, ZREM, ZSCORE, ZMSCORE, ZCARD, ZCOUNT, ZLEXCOUNT, ZRANK, ZREVRANK, ZRANGE, ZRANGESTORE, ZREVRANGE, ZRANGEBYSCORE, ZREVRANGEBYSCORE, ZRANGEBYLEX, ZREVRANGEBYLEX, ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREMRANGEBYLEX, ZPOPMIN, ZPOPMAX, ZMPOP, ZRANDMEMBER, ZSCAN, ZUNION, ZINTER, ZDIFF, ZINTERCARD, ZUNIONSTORE, ZINTERSTORE, ZDIFFSTORE, BZPOPMIN, BZPOPMAX, BZMPOP | See [sorted sets](#sorted-sets) and [blocking commands](#blocking-commands) |
 | Bitmaps | SETBIT, GETBIT, BITCOUNT, BITPOS, BITOP, BITFIELD, BITFIELD_RO | Bitmaps are strings. BITCOUNT and BITPOS accept BYTE and BIT ranges; BITOP supports AND, OR, XOR and NOT; BITFIELD supports GET, SET, INCRBY and OVERFLOW WRAP, SAT or FAIL. A bit offset is below 2³² |
 | HyperLogLog | PFADD, PFCOUNT, PFMERGE | See [HyperLogLog](#hyperloglog) |
+| Geo | GEOADD, GEODIST, GEOHASH, GEOPOS, GEOSEARCH, GEOSEARCHSTORE, GEORADIUS, GEORADIUS_RO, GEORADIUSBYMEMBER, GEORADIUSBYMEMBER_RO | See [geo](#geo) |
 | Keys | DEL, UNLINK, EXISTS, TYPE, OBJECT, KEYS, SCAN, DBSIZE | Glob patterns `*`, `?`, `[a-z]`, `[^x]`, `\`. SCAN accepts MATCH, COUNT, TYPE. OBJECT supports ENCODING only: `int`, `embstr` or `raw` for a string, as in Redis |
 | Expiry | EXPIRE, PEXPIRE, EXPIREAT, PEXPIREAT, TTL, PTTL, PERSIST | NX, XX, GT, LT. A time in the past deletes the key. TTL returns −2 for a missing key and −1 for a key without expiry |
 | Transactions | MULTI, EXEC, DISCARD, WATCH, UNWATCH | See [transactions](#transactions) |
@@ -25,7 +26,7 @@ CasketDB implements the string subset of Redis 7 over RESP2. Semantics, replies 
 
 ### Data types
 
-Strings, including the bitmap and HyperLogLog commands, hashes, sets, lists and sorted sets. Streams, geo, pub/sub, Lua and Functions are not implemented.
+Strings, including the bitmap and HyperLogLog commands, hashes, sets, lists, and sorted sets, including the geo commands. Streams, pub/sub, Lua and Functions are not implemented.
 
 ### Hashes
 
@@ -67,6 +68,12 @@ Differences from Redis:
 
 - PFCOUNT does not store the cardinality it computes in the value, so it stays a read command and also runs on followers. A value written by PFADD or PFMERGE always has an invalid cached cardinality, and PFCOUNT computes it each time.
 - `hll-sparse-max-bytes` is fixed at 3,000, the default of Redis. PFDEBUG and PFSELFTEST are missing.
+
+### Geo
+
+A geo index is a sorted set whose scores are 52-bit geohashes, as in Redis: `TYPE` answers `zset`, and the sorted set commands work on it. The geohash, the areas a search scans, and the replies follow Redis 7.2: coordinates with up to 17 decimals, distances with 4, and a search with COUNT but without ASC, DESC or ANY sorts by distance.
+
+Distances use the sine, cosine and arcsine of Go, which can differ from those of the C library Redis uses in the last bit of a result. The 4 decimals of a reply do not show it, but STOREDIST stores the whole number, and its last digits can differ from Redis.
 
 ### Blocking commands
 
@@ -111,7 +118,7 @@ Users work as in Redis 6 and later. `default` always exists; `CONFIG SET require
 
 Users are kept in the file `SYSTEM` in the data directory and survive restarts; once it exists, `-requirepass` is ignored at start, with a warning. In a cluster a change to users is a Raft entry: run it on the leader, a follower answers `READONLY`, and every node applies it and includes it in snapshots. FLUSHDB does not touch users.
 
-`ACL SETUSER` understands `on`, `off`, `>password`, `<password`, `#hash`, `!hash`, `nopass`, `resetpass`, `~pattern`, `allkeys`, `resetkeys`, `+command`, `-command`, `+@category`, `-@category`, `allcommands`, `nocommands` and `reset`. A new user starts `off`, without passwords, keys or commands. The categories are `keyspace`, `read`, `write`, `string`, `bitmap`, `hash`, `set`, `list`, `sortedset`, `blocking`, `hyperloglog`, `fast`, `slow`, `admin`, `dangerous`, `connection` and `transaction`, assigned as in Redis; `RAFT` is `@admin` and `@dangerous`. A denied command answers `NOPERM`, and inside MULTI it aborts EXEC. `ACL LOG [count|RESET]` lists the latest denials of commands, keys and logins on this node, newest first, up to 128; a repeat within a minute adds to the count of its entry.
+`ACL SETUSER` understands `on`, `off`, `>password`, `<password`, `#hash`, `!hash`, `nopass`, `resetpass`, `~pattern`, `allkeys`, `resetkeys`, `+command`, `-command`, `+@category`, `-@category`, `allcommands`, `nocommands` and `reset`. A new user starts `off`, without passwords, keys or commands. The categories are `keyspace`, `read`, `write`, `string`, `bitmap`, `hash`, `set`, `list`, `sortedset`, `blocking`, `hyperloglog`, `geo`, `fast`, `slow`, `admin`, `dangerous`, `connection` and `transaction`, assigned as in Redis; `RAFT` is `@admin` and `@dangerous`. A denied command answers `NOPERM`, and inside MULTI it aborts EXEC. `ACL LOG [count|RESET]` lists the latest denials of commands, keys and logins on this node, newest first, up to 128; a repeat within a minute adds to the count of its entry.
 
 Differences from Redis:
 

@@ -40,9 +40,10 @@ const (
 	catSortedSet
 	catBlocking
 	catHyperLogLog
+	catGeo
 )
 
-var categoryNames = []string{"keyspace", "read", "write", "string", "fast", "slow", "admin", "dangerous", "connection", "transaction", "bitmap", "hash", "set", "list", "sortedset", "blocking", "hyperloglog"}
+var categoryNames = []string{"keyspace", "read", "write", "string", "fast", "slow", "admin", "dangerous", "connection", "transaction", "bitmap", "hash", "set", "list", "sortedset", "blocking", "hyperloglog", "geo"}
 
 func (cmd command) categories() category {
 	c := cmd.acl

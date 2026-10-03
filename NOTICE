@@ -3,14 +3,18 @@ Copyright 2026 The CasketDB authors
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
-The skiplist in internal/bitcask/skiplist.go and the sparse HyperLogLog
-update and estimator in internal/server/hyperloglog.go follow the algorithms
-of Redis 7.2 (src/t_zset.c and src/hyperloglog.c), which are distributed
-under the following license:
+The skiplist in internal/bitcask/skiplist.go, the sparse HyperLogLog update
+and estimator in internal/server/hyperloglog.go, and the geohash encoding,
+search areas and GEO commands in internal/server/geo.go follow the algorithms
+of Redis 7.2 (src/t_zset.c, src/hyperloglog.c, src/geohash.c,
+src/geohash_helper.c and src/geo.c), which are distributed under the
+following license:
 
 Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
 Copyright (c) 2009-2012, Pieter Noordhuis <pcnoordhuis at gmail dot com>
-Copyright (c) 2014, Salvatore Sanfilippo <antirez at gmail dot com>
+Copyright (c) 2013-2014, yinqiwen <yinqiwen at gmail dot com>
+Copyright (c) 2014, Matt Stancliff <matt at genges dot com>
+Copyright (c) 2014-2016, Salvatore Sanfilippo <antirez at gmail dot com>
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without

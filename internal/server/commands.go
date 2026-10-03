@@ -47,6 +47,7 @@ type connFunc func(s *Server, c *client, args [][]byte) reply
 type keySpec struct {
 	first, last, step int
 	numkeys           int
+	storeFrom         int
 }
 
 var (
@@ -69,6 +70,12 @@ func (k keySpec) extract(args [][]byte, dst []string) []string {
 		n, ok := parseInt(args[k.numkeys])
 		for i := k.numkeys + 1; ok && i < len(args) && int64(i-k.numkeys) <= n; i++ {
 			dst = append(dst, string(args[i]))
+		}
+	}
+	for i := k.storeFrom; k.storeFrom > 0 && i+1 < len(args); i++ {
+		if opt := upper(args[i]); opt == "STORE" || opt == "STOREDIST" {
+			dst = append(dst, string(args[i+1]))
+			i++
 		}
 	}
 	return dst
@@ -112,7 +119,7 @@ var commands map[string]command
 
 func init() {
 	commands = map[string]command{}
-	for _, table := range []map[string]command{serverCommands, keyCommands, stringCommands, bitCommands, hashCommands, setCommands, listCommands, zsetCommands, blockingCommands, hyperLogLogCommands, transactionCommands, raftCommands, aclCommands} {
+	for _, table := range []map[string]command{serverCommands, keyCommands, stringCommands, bitCommands, hashCommands, setCommands, listCommands, zsetCommands, blockingCommands, hyperLogLogCommands, geoCommands, transactionCommands, raftCommands, aclCommands} {
 		maps.Copy(commands, table)
 	}
 	for id, name := range slices.Sorted(maps.Keys(commands)) {
